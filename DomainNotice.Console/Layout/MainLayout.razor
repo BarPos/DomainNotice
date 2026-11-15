@@ -28,7 +28,7 @@
             <Authorized>
                 <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Class="ml-2 mr-1" />
                 <MudText Typo="Typo.body2" Class="mr-1">@(context.User.FindFirst(ConsoleAuth.DisplayNameClaim)?.Value ?? context.User.Identity?.Name)</MudText>
-                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Inherit" Class="mr-2">
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Inherit" Class="mr-2 dn-appbar-chip">
                     @(context.User.IsAdmin() ? T["Admin"] : T["Read-only"])
                 </MudChip>
                 <form method="post" action="/account/logout" class="d-inline">

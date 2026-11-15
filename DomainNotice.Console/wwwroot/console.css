@@ -23,6 +23,10 @@ body { margin: 0; }
 .dn-appbar-search .mud-input:focus-within { background: rgba(255, 255, 255, 0.20); }
 .dn-appbar-search .mud-input-adornment .mud-icon-root { color: rgba(255, 255, 255, 0.85); }
 @media (max-width: 700px) { .dn-appbar-search { min-width: 0; flex-basis: 160px; } }
+/* Badges in the dark top bar (e.g. the role): white text on a light outline, readable on the dark background. */
+.dn-appbar-chip.mud-chip { color: #ffffff !important; border-color: rgba(255, 255, 255, 0.6) !important;
+                           background: rgba(255, 255, 255, 0.12) !important; font-weight: 500; }
+.dn-appbar-chip.mud-chip .mud-chip-content { color: #ffffff !important; }
 
 /* ---------- page pattern: tree left, grid middle ---------- */
 .dn-page-title { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
