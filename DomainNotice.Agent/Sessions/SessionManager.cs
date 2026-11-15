@@ -47,6 +47,7 @@ public sealed class SessionManager : BackgroundService, ISessionsSource
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await Task.Yield();
+        var sessionEvent = false;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -58,9 +59,13 @@ public sealed class SessionManager : BackgroundService, ISessionsSource
                 _logger.LogError(ex, "Reading user sessions failed.");
             }
 
+            // Every SCM session event (logon, logoff, lock, unlock, remote connect/disconnect) also sends Status,
+            // even when the session list looks the same afterwards.
+            if (sessionEvent) _status.Set();
+
             try
             {
-                await _events.Changed.WaitAsync(PollInterval, stoppingToken).ConfigureAwait(false);
+                sessionEvent = await _events.Changed.WaitAsync(PollInterval, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

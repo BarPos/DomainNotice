@@ -36,6 +36,9 @@ builder.Logging.AddProvider(new RollingFileLoggerProvider(paths.Logs));
 builder.Logging.SetMinimumLevel(LogLevel.Information);
 builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Information);
+// The default host limits the Event Log provider to Warning; these category rules are more specific and win.
+builder.Logging.AddFilter<EventLogLoggerProvider>(AgentConstants.ServiceEventsCategory, LogLevel.Information);
+builder.Logging.AddFilter<EventLogLoggerProvider>("Microsoft.Hosting.Lifetime", LogLevel.Information);
 builder.Services.Configure<EventLogSettings>(settings =>
 {
     settings.SourceName = AgentConstants.EventSource;
