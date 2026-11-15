@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using NetworkChange = System.Net.NetworkInformation.NetworkChange;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -404,9 +405,11 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
         if (!string.IsNullOrWhiteSpace(welcome.KerberosServicePrincipal))
             _ = Task.Run(() => ProveIdentityAsync(connection, ssl, welcome.KerberosServicePrincipal!, linkCts.Token), CancellationToken.None);
 
+        var work = Channel.CreateUnbounded<IncomingFrame>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
         var tasks = new[]
         {
-            ReadLoopAsync(connection, keepalive, linkCts.Token),
+            ReadLoopAsync(connection, keepalive, work.Writer, linkCts.Token),
+            DispatchLoopAsync(work.Reader, linkCts.Token),
             PingLoopAsync(connection, keepalive, linkCts.Token),
             StatusLoopAsync(connection, linkCts.Token),
         };
@@ -435,18 +438,51 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
         }
     }
 
-    private async Task ReadLoopAsync(FrameConnection connection, KeepaliveMonitor keepalive, CancellationToken ct)
+    /// <summary>
+    /// Reads frames and answers keepalives only. Everything else goes to <see cref="DispatchLoopAsync"/> through a
+    /// queue, so slow local work (the Session UI pipe, writing or hashing an update package) can never stop the
+    /// reading, which would starve the keepalive and stall the server's writes.
+    /// </summary>
+    private async Task ReadLoopAsync(FrameConnection connection, KeepaliveMonitor keepalive, ChannelWriter<IncomingFrame> work, CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        try
         {
-            var frame = await connection.ReadAsync(ct).ConfigureAwait(false);
-            if (frame is null)
+            while (!ct.IsCancellationRequested)
             {
-                _logger.LogInformation("The server closed the connection.");
-                return;
-            }
+                var frame = await connection.ReadAsync(ct).ConfigureAwait(false);
+                if (frame is null)
+                {
+                    _logger.LogInformation("The server closed the connection.");
+                    return;
+                }
 
-            keepalive.MarkReceived();
+                keepalive.MarkReceived();
+                switch (frame.Message)
+                {
+                    case Ping:
+                        await connection.SendAsync(new Pong(), frame.Envelope!.Id, ct).ConfigureAwait(false);
+                        break;
+                    case Pong:
+                        break;
+                    case Refused refused:
+                        _delayOverride = HandleRefused(refused, SafeLoad());
+                        return;
+                    default:
+                        work.TryWrite(frame); // unbounded
+                        break;
+                }
+            }
+        }
+        finally
+        {
+            work.TryComplete();
+        }
+    }
+
+    private async Task DispatchLoopAsync(ChannelReader<IncomingFrame> work, CancellationToken ct)
+    {
+        await foreach (var frame in work.ReadAllAsync(ct).ConfigureAwait(false))
+        {
             if (frame.Chunk is { } chunk)
             {
                 await _updater.OnChunkAsync(chunk, ct).ConfigureAwait(false);
@@ -456,11 +492,6 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
             var envelope = frame.Envelope!;
             switch (frame.Message)
             {
-                case Ping:
-                    await connection.SendAsync(new Pong(), envelope.Id, ct).ConfigureAwait(false);
-                    break;
-                case Pong:
-                    break;
                 case Show show:
                     await _router.OnServerShowAsync(show, ct).ConfigureAwait(false);
                     break;
@@ -479,9 +510,6 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
                 case UpdateAgent update:
                     await _updater.OnUpdateAgentAsync(update, ct).ConfigureAwait(false);
                     break;
-                case Refused refused:
-                    _delayOverride = HandleRefused(refused, SafeLoad());
-                    return;
                 case null:
                     _logger.LogDebug("Ignored unknown message type {Type}.", envelope.Type);
                     break;
@@ -490,6 +518,9 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
                     break;
             }
         }
+        // The reader completed the queue: the link is gone. Keep this task pending until cancellation so that
+        // Task.WhenAny picks the read loop's own outcome (closed / refused / error).
+        await Task.Delay(System.Threading.Timeout.Infinite, ct).ConfigureAwait(false);
     }
 
     private async Task PingLoopAsync(FrameConnection connection, KeepaliveMonitor keepalive, CancellationToken ct)

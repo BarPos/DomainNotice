@@ -71,13 +71,25 @@ internal sealed class AgentConnection : IAgentConnection, IAsyncDisposable
         await SendCoreAsync(message, replyTo, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// A frame that cannot be written in this time means the agent stopped reading (its TCP window is full). The
+    /// connection is aborted instead of letting senders (and the read loop answering Ping) wait forever.
+    /// </summary>
+    internal static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(30);
+
     private async Task SendCoreAsync<T>(T message, Guid? replyTo, CancellationToken ct) where T : IAgentMessage
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
+        linked.CancelAfter(WriteTimeout);
         await _sendLock.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
             await Frames.SendAsync(message, replyTo, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && !_cts.IsCancellationRequested)
+        {
+            AbortStalled();
+            throw;
         }
         finally
         {
@@ -85,14 +97,27 @@ internal sealed class AgentConnection : IAgentConnection, IAsyncDisposable
         }
     }
 
+    private void AbortStalled()
+    {
+        _logger.LogWarning("Computer {ComputerId}: a write did not complete within {Seconds} s; closing the connection.",
+            ComputerId, (int)WriteTimeout.TotalSeconds);
+        Abort();
+    }
+
     public async Task SendChunkAsync(Guid transferId, long offset, ReadOnlyMemory<byte> data, CancellationToken ct = default)
     {
         if (IsClosing) throw new InvalidOperationException("The agent connection is closing.");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
+        linked.CancelAfter(WriteTimeout);
         await _sendLock.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
             await Frames.SendChunkAsync(transferId, offset, data, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && !_cts.IsCancellationRequested)
+        {
+            AbortStalled();
+            throw;
         }
         finally
         {

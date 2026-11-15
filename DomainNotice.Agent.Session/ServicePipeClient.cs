@@ -48,14 +48,15 @@ internal sealed class ServicePipeClient
                 var stream = new LocalMessageStream(pipe);
                 _stream = stream;
                 ConnectionChanged?.Invoke(true);
-                await stream.SendAsync(new RequestPending(), ct).ConfigureAwait(false);
-
+                // Keep reading while the request is written, so neither side waits on the other.
+                var request = stream.SendAsync(new RequestPending(), ct);
                 while (true)
                 {
                     var frame = await stream.ReadAsync(ct).ConfigureAwait(false);
                     if (frame is null) break;
                     if (frame.Message is { } message) MessageReceived?.Invoke(message);
                 }
+                await request.ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

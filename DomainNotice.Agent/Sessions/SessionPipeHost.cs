@@ -32,6 +32,13 @@ internal sealed class SessionPipeHost
         _logger = logger;
     }
 
+    // Real buffers: with zero-size buffers a write completes only when the other side reads, and the service and the
+    // Session UI both write first after connecting (status / RequestPending), which deadlocked the pipe.
+    private const int PipeBufferSize = 64 * 1024;
+
+    /// <summary>A Session UI that does not read for this long is disconnected (it reconnects) instead of blocking us.</summary>
+    internal static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(10);
+
     public async Task RunAsync(CancellationToken ct)
     {
         var name = LocalPipe.NameFor(_sessionId);
@@ -42,7 +49,7 @@ internal sealed class SessionPipeHost
             {
                 pipe = NamedPipeServerStreamAcl.Create(
                     name, PipeDirection.InOut, maxNumberOfServerInstances: 1, PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance, inBufferSize: 0, outBufferSize: 0,
+                    PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance, inBufferSize: PipeBufferSize, outBufferSize: PipeBufferSize,
                     CreateSecurity(), HandleInheritability.None);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -83,7 +90,8 @@ internal sealed class SessionPipeHost
         _logger.LogInformation("Session {SessionId} ({User}): Session UI connected.", _sessionId, _userName);
         try
         {
-            await _router.OnSessionConnectedAsync(endpoint, ct).ConfigureAwait(false);
+            // Send the initial status and pending announcements while already reading what the Session UI sends.
+            var initial = _router.OnSessionConnectedAsync(endpoint, ct);
             while (true)
             {
                 var frame = await stream.ReadAsync(ct).ConfigureAwait(false);
@@ -91,6 +99,7 @@ internal sealed class SessionPipeHost
                 if (frame.Message is { } message)
                     await _router.OnSessionMessageAsync(endpoint, message, ct).ConfigureAwait(false);
             }
+            await initial.ConfigureAwait(false);
         }
         finally
         {
@@ -117,6 +126,20 @@ internal sealed class SessionPipeHost
         public int SessionId { get; } = sessionId;
         public string UserName { get; } = userName;
 
-        public Task SendAsync<T>(T message, CancellationToken ct) where T : ILocalMessage => stream.SendAsync(message, ct);
+        public async Task SendAsync<T>(T message, CancellationToken ct) where T : ILocalMessage
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(SendTimeout);
+            try
+            {
+                await stream.SendAsync(message, timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // The Session UI stopped reading: break the pipe so it reconnects and gets the pending items again.
+                await stream.DisposeAsync().ConfigureAwait(false);
+                throw new IOException($"The Session UI did not read for {SendTimeout.TotalSeconds:0} s; pipe closed.");
+            }
+        }
     }
 }
