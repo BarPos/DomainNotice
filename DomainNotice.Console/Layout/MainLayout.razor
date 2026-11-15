@@ -70,9 +70,10 @@
             var theme = await JS.InvokeAsync<string?>("domainNotice.getTheme");
             _dark = theme is null ? await JS.InvokeAsync<bool>("domainNotice.prefersDark") : theme == "dark";
         }
-        catch (JSException ex)
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or TaskCanceledException)
         {
             Logger.LogDebug(ex, "Browser helpers unavailable");
+            return;
         }
         try
         {
@@ -89,7 +90,7 @@
     {
         _dark = !_dark;
         try { await JS.InvokeVoidAsync("domainNotice.setTheme", _dark ? "dark" : "light"); }
-        catch (JSException) { }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException) { }
     }
 
     private void SearchKeyUp(KeyboardEventArgs e)

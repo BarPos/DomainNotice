@@ -68,17 +68,3 @@ public sealed class AnnouncementHandoff
         return t;
     }
 }
-
-/// <summary>Light/dark theme for one circuit; the choice is kept in the browser's localStorage.</summary>
-public sealed class ThemeState
-{
-    public bool Dark { get; private set; }
-    public event Action? Changed;
-
-    public void Set(bool dark)
-    {
-        if (Dark == dark) return;
-        Dark = dark;
-        Changed?.Invoke();
-    }
-}

@@ -4,6 +4,7 @@ using DomainNotice.Console.Endpoints;
 using DomainNotice.Server.Tests.Infrastructure;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DomainNotice.Server.Tests.Console;
 
@@ -87,10 +88,10 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
             Assert.Contains("Audit log", html); // the navigation rendered
         }
 
-        foreach (var list in DomainNotice.Console.Lists.ConsoleLists.All.Keys)
+        foreach (var listName in DomainNotice.Console.Lists.ConsoleLists.All.Keys)
         {
-            var csv = await client.GetAsync($"/export/{list}.csv?f=name:contains:x&sort=-name", Ct);
-            Assert.True(csv.StatusCode == HttpStatusCode.OK, $"{list}: {(int)csv.StatusCode}");
+            var csv = await client.GetAsync($"/export/{listName}.csv?f=name:contains:x&sort=-name", Ct);
+            Assert.True(csv.StatusCode == HttpStatusCode.OK, $"{listName}: {(int)csv.StatusCode}");
             Assert.Equal("text/csv", csv.Content.Headers.ContentType?.MediaType);
         }
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/export/nope.csv", Ct)).StatusCode);
@@ -99,6 +100,22 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
         var logout = await client.PostAsync("/account/logout", Form(logoutPage), Ct);
         Assert.Equal(HttpStatusCode.Redirect, logout.StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/settings", Ct)).StatusCode);
+
+        // P4: a Viewer sees no mutating actions, and the server refuses them.
+        var accounts = factory.Services.GetRequiredService<DomainNotice.Server.Abstractions.ILocalAccountService>();
+        Assert.True((await accounts.CreateAsync("viewer1", "Passw0rd!y", "test", Ct)).Ok); // dev fake: "viewer*" = Viewer
+        var viewerLogin = await client.GetStringAsync("/account/login", Ct);
+        var signedIn = await client.PostAsync("/account/login", Form(viewerLogin, ("source", "local"), ("username", "viewer1"), ("password", "Passw0rd!y")), Ct);
+        Assert.Equal("/", signedIn.Headers.Location!.ToString());
+        var list = await client.GetStringAsync("/announcements", Ct);
+        Assert.Contains("Read-only", list);
+        Assert.DoesNotContain("New announcement", list);
+        var settings = await client.GetStringAsync("/settings?tab=agent", Ct);
+        Assert.DoesNotContain("/settings/agent-package", settings);
+        using var upload = new MultipartFormDataContent { { new StringContent(TokenRegex().Match(settings).Groups[1].Value), "__RequestVerificationToken" } };
+        var refused = await client.PostAsync("/settings/agent-package", upload, Ct);
+        Assert.True(refused.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Redirect, $"{(int)refused.StatusCode}");
+        if (refused.StatusCode == HttpStatusCode.Redirect) Assert.StartsWith("/account/denied", refused.Headers.Location!.PathAndQuery);
 
         try { System.IO.Directory.Delete(dataDir, true); } catch (IOException) { }
     }

@@ -105,11 +105,13 @@
             {
                 <tr><td colspan="@ColumnCount" class="dn-grid-empty">@(_loaded ? "No items match." : "Loading…")</td></tr>
             }
-            @foreach (var row in _rows)
+            @for (var index = 0; index < _rows.Count; index++)
             {
+                var row = _rows[index];
                 var key = List.RowKey(row);
                 var selected = _selected.ContainsKey(key);
-                <tr class="@RowClass(selected)" @key="key" @onclick="@(() => RowClicked(row))"
+                @* Rows without identity (anonymous answers) can be equal; they are keyed by position. *@
+                <tr class="@RowClass(selected)" @key="@(List.Selectable ? key : index)" @onclick="@(() => RowClicked(row))"
                     @oncontextmenu="@(e => OpenContextMenuAsync(e, row))" @oncontextmenu:preventDefault="@(ContextMenu is not null)">
                     @if (Selectable)
                     {

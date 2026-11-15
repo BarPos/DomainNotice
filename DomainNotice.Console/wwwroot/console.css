@@ -121,3 +121,4 @@ body { margin: 0; }
 .dn-account-info { background: #e8f4ea; color: #1f5a2b; border: 1px solid #b6dcbf; border-radius: 4px; padding: 8px 10px; font-size: 0.9rem; margin-bottom: 8px; }
 .dn-account-foot { margin-top: 16px; font-size: 0.8rem; color: #5b6670; text-align: center; }
 .dn-account-foot a { color: #1e6fd9; }
+.dn-grid .mud-simple-table { overflow-x: auto; }
