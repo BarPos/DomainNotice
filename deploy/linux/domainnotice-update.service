@@ -1,0 +1,13 @@
+# Applies a staged DomainNotice update (plan 11.2). One-shot, as root, in its own unit, so it keeps running while it
+# stops and starts domainnotice.service. Runs the root-owned copy installed by install.sh, never a script from the
+# package being installed.
+[Unit]
+Description=Apply a staged DomainNotice update
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/domainnotice/bin/update.sh
+# The download is already done; this covers unpacking, pg_dump, migrations and the 2-minute health check.
+TimeoutStartSec=1h

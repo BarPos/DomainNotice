@@ -1,0 +1,144 @@
+# P12: builds the release assets of plan 11.4 when a v<version> tag is pushed and publishes a GitHub release:
+#   DomainNotice.Server-<version>-linux-x64.tar.gz, DomainNotice.Server-<version>-linux-arm64.tar.gz,
+#   install.sh, DomainNotice.Agent-<version>-x64.msi, SHA256SUMS.txt
+# Releases are not signed yet (P10 deferred).
+name: release
+
+on:
+  push:
+    tags: [ "v*" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Check tag against Directory.Build.props
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          [[ "$version" =~ ^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$ ]] || { echo "::error::tag $tag is not v<x.y.z>"; exit 1; }
+          props="$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' Directory.Build.props | head -n1)"
+          app="$(sed -n 's:.*const string Current = "\([^"]*\)".*:\1:p' DomainNotice.Shared/AppVersion.cs | head -n1)"
+          [[ "$props" == "$version" ]] || { echo "::error::tag $tag does not match Directory.Build.props ($props)"; exit 1; }
+          [[ "$app" == "$version" ]] || { echo "::error::tag $tag does not match AppVersion.Current ($app)"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Tests
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Shell checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in build/build-server.sh deploy/linux/install.sh deploy/linux/update.sh deploy/linux/tests/update-functions-test.sh; do bash -n "$f"; done
+          # shellcheck has not been run on these scripts yet: report findings, but do not block the release.
+          if command -v shellcheck >/dev/null; then
+            shellcheck -x -S warning build/build-server.sh deploy/linux/*.sh deploy/linux/tests/*.sh ||
+              echo "::warning::shellcheck reported findings (non-blocking)"
+          fi
+          deploy/linux/update.sh --self-test
+          deploy/linux/tests/update-functions-test.sh
+      - name: dotnet test (PostgreSQL 16 via Testcontainers)
+        run: dotnet test --project DomainNotice.Server.Tests
+
+  server:
+    name: Server tarballs
+    needs: [ version, test ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: build-server.sh
+        run: build/build-server.sh --arch x64 --arch arm64
+      - name: Check asset names
+        shell: bash
+        run: |
+          v='${{ needs.version.outputs.version }}'
+          test -f "artifacts/DomainNotice.Server-$v-linux-x64.tar.gz"
+          test -f "artifacts/DomainNotice.Server-$v-linux-arm64.tar.gz"
+          test -f artifacts/install.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server
+          if-no-files-found: error
+          path: |
+            artifacts/DomainNotice.Server-*.tar.gz
+            artifacts/install.sh
+
+  agent:
+    name: Agent MSI
+    needs: [ version, test ]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: build-agent-msi.ps1
+        shell: pwsh
+        run: ./build/build-agent-msi.ps1
+      - name: Check asset name
+        shell: pwsh
+        run: |
+          $msi = "artifacts/DomainNotice.Agent-${{ needs.version.outputs.version }}-x64.msi"
+          if (-not (Test-Path $msi)) { throw "build-agent-msi.ps1 did not produce $msi" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent
+          if-no-files-found: error
+          path: artifacts/DomainNotice.Agent-*-x64.msi
+
+  release:
+    name: GitHub release
+    needs: [ version, server, agent ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: SHA256SUMS.txt over all assets
+        shell: bash
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          v='${{ needs.version.outputs.version }}'
+          files=("DomainNotice.Server-$v-linux-x64.tar.gz" "DomainNotice.Server-$v-linux-arm64.tar.gz" install.sh "DomainNotice.Agent-$v-x64.msi")
+          for f in "${files[@]}"; do test -f "$f" || { echo "::error::missing asset $f"; exit 1; }; done
+          sha256sum "${files[@]}" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Create the release
+        shell: bash
+        working-directory: assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          v='${{ needs.version.outputs.version }}'
+          gh release create "v$v" --verify-tag --title "DomainNotice $v" --generate-notes \
+            "DomainNotice.Server-$v-linux-x64.tar.gz" "DomainNotice.Server-$v-linux-arm64.tar.gz" \
+            install.sh "DomainNotice.Agent-$v-x64.msi" SHA256SUMS.txt
