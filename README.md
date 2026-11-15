@@ -1,6 +1,6 @@
 # DomainNotice
 
-[![build](https://github.com/BarPos/DomainNotice/actions/workflows/build.yml/badge.svg)](https://github.com/BarPos/DomainNotice/actions/workflows/build.yml)
+[![release](https://github.com/BarPos/DomainNotice/actions/workflows/release.yml/badge.svg)](https://github.com/BarPos/DomainNotice/actions/workflows/release.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://barpos.github.io/DomainNotice/)
 
