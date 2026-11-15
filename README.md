@@ -1,6 +1,7 @@
 # DomainNotice
 
 [![build](https://github.com/BarPos/DomainNotice/actions/workflows/build.yml/badge.svg)](https://github.com/BarPos/DomainNotice/actions/workflows/build.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://barpos.github.io/DomainNotice/)
 
 Administrators write announcements in a web **Console**, and every Windows PC in the domain shows them in a window that
@@ -82,5 +83,9 @@ Releases are made by hand:
 2. Run **Actions → release → Run workflow**. It tests, builds the server tarballs (x64, arm64) and the agent MSI, then
    publishes the `v<version>` release with `SHA256SUMS.txt`.
 
-`install.sh` and the server's updater download from these releases. Every push to `main` also runs the **build**
-workflow, which leaves the tarballs and the MSI as downloadable artifacts.
+`install.sh` and the server's updater download from these releases. To get the tarballs and the MSI without a
+release, run **Actions → build → Run workflow**; they are attached to the run as artifacts.
+
+## License
+
+[MIT](LICENSE) © Bartłomiej Postek

@@ -1,15 +1,10 @@
-# Build and test: runs on every push to main, on pull requests, by hand (Actions → build → Run workflow), and is
-# reused by release.yml. Produces downloadable artifacts (no release):
+# Build and test. Runs only when started by hand (Actions → build → Run workflow) and as part of release.yml.
+# Produces downloadable artifacts (no release):
 #   server: DomainNotice.Server-<version>-linux-x64.tar.gz, DomainNotice.Server-<version>-linux-arm64.tar.gz, install.sh
 #   agent:  DomainNotice.Agent-<version>-x64.msi (WiX 5 on Windows)
 name: build
 
 on:
-  push:
-    branches: [ main ]
-    paths-ignore: [ "docs/**", "**.md" ]
-  pull_request:
-    paths-ignore: [ "docs/**", "**.md" ]
   workflow_dispatch:
   workflow_call:
     outputs:

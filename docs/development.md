@@ -83,9 +83,10 @@ testenv/reset.sh
 | `build/build-server.sh [--arch x64\|arm64]` | `artifacts/DomainNotice.Server-<v>-linux-<arch>.tar.gz`, `install.sh`, `SHA256SUMS.txt` |
 | `pwsh build/build-agent-msi.ps1` (Windows) | `artifacts/DomainNotice.Agent-<v>-x64.msi` (WiX 5) |
 
-On GitHub, the **build** workflow (`.github/workflows/build.yml`) does all of this on every push to `main`, on pull
-requests and on demand. It runs the tests, builds the server tarballs on Ubuntu and the MSI on Windows, and attaches
-them to the run as artifacts (`server`, `agent`). Use it to get an MSI without making a release.
+On GitHub, the **build** workflow (`.github/workflows/build.yml`) does all of this when you start it by hand
+(**Actions → build → Run workflow**); nothing runs automatically on push. It runs the tests, builds the server tarballs
+on Ubuntu and the MSI on Windows, and attaches them to the run as artifacts (`server`, `agent`). Use it to get an MSI
+without making a release.
 
 ## Releasing
 

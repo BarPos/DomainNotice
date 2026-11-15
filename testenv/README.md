@@ -37,7 +37,7 @@ The server is configured with LDAPS against the DC's CA, `AdminGroups=["DomainNo
 
 ## Testing with a Windows PC
 
-1. **Get the MSI** from GitHub Actions: after a push to `main`, open **Actions → build → the latest run → Artifacts →
+1. **Get the MSI** from GitHub Actions: run **Actions → build → Run workflow**, then open the run → **Artifacts →
    agent**. It contains `DomainNotice.Agent-1.0.0-x64.msi`, built with WiX on a Windows runner. You can also run
    `build\build-agent-msi.ps1` on a Windows machine with the .NET 10 SDK. Optionally upload the MSI in the Console
    under Settings → Agent install, so it can be downloaded from there.
