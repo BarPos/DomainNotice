@@ -27,6 +27,7 @@ public sealed class AgentSettingsStore
     private const string PlainPasswordValue = "InstallPassword";
     private const string ProtectedPasswordValue = "InstallPasswordProtected";
     private const string ReenrolValue = "ReenrolRequested";
+    private const string LanguageValue = "Language";
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("DomainNotice.Agent/InstallPassword/v1");
 
     private readonly object _gate = new();
@@ -61,6 +62,32 @@ public sealed class AgentSettingsStore
             if (computerId is { } id) key.SetValue("ComputerId", id.ToString("D"), RegistryValueKind.String);
             else key.DeleteValue("ComputerId", throwOnMissingValue: false);
         }
+    }
+
+    /// <summary>Language last received from the server (so the tray is right before it connects).</summary>
+    public string? LoadLanguage()
+    {
+        try
+        {
+            using var hklm = Hklm;
+            using var key = hklm.OpenSubKey(KeyPath);
+            return key?.GetValue(LanguageValue) as string;
+        }
+        catch (Exception) { return null; }
+    }
+
+    public void SaveLanguage(string language)
+    {
+        try
+        {
+            lock (_gate)
+            {
+                using var hklm = Hklm;
+                using var key = hklm.CreateSubKey(KeyPath, writable: true);
+                key.SetValue(LanguageValue, language, RegistryValueKind.String);
+            }
+        }
+        catch (Exception) { /* best effort */ }
     }
 
     public byte[]? LoadClientCertificate()

@@ -2,15 +2,15 @@
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject BrowserClock Clock
 
-<PageTitle>Search · DomainNotice</PageTitle>
+<PageTitle>@T["Search"] · DomainNotice</PageTitle>
 
 <div class="dn-page-title">
-    <MudText Typo="Typo.h5">Search results for "@Q"</MudText>
+    <MudText Typo="Typo.h5">@T.F("Search results for \"{0}\"", Q)</MudText>
 </div>
 
 @if (string.IsNullOrWhiteSpace(Q))
 {
-    <MudText>Type in the search box at the top.</MudText>
+    <MudText>@T["Type in the search box at the top."]</MudText>
 }
 else if (_result is null)
 {
@@ -21,10 +21,10 @@ else
     <div class="dn-tiles">
         <MudPaper Outlined="true" Class="pa-3">
             <div class="d-flex align-center mb-2">
-                <MudIcon Icon="@Icons.Material.Filled.Computer" Class="mr-2" /><MudText Typo="Typo.subtitle1">Computers</MudText>
-                <MudSpacer /><MudLink Href="@($"/computers?q={Uri.EscapeDataString(Q)}")" Typo="Typo.body2">Open in list</MudLink>
+                <MudIcon Icon="@Icons.Material.Filled.Computer" Class="mr-2" /><MudText Typo="Typo.subtitle1">@T["Computers"]</MudText>
+                <MudSpacer /><MudLink Href="@($"/computers?q={Uri.EscapeDataString(Q)}")" Typo="Typo.body2">@T["Open in list"]</MudLink>
             </div>
-            @if (_result.Computers.Count == 0) { <MudText Typo="Typo.body2">No match.</MudText> }
+            @if (_result.Computers.Count == 0) { <MudText Typo="Typo.body2">@T["No match."]</MudText> }
             @foreach (var c in _result.Computers)
             {
                 <div class="d-flex align-center gap-2 py-1">
@@ -36,17 +36,17 @@ else
 
         <MudPaper Outlined="true" Class="pa-3">
             <div class="d-flex align-center mb-2">
-                <MudIcon Icon="@Icons.Material.Filled.Person" Class="mr-2" /><MudText Typo="Typo.subtitle1">Users</MudText>
-                <MudSpacer /><MudLink Href="@($"/history?tab=1&u.q={Uri.EscapeDataString(Q)}")" Typo="Typo.body2">User history</MudLink>
+                <MudIcon Icon="@Icons.Material.Filled.Person" Class="mr-2" /><MudText Typo="Typo.subtitle1">@T["Users"]</MudText>
+                <MudSpacer /><MudLink Href="@($"/history?tab=1&u.q={Uri.EscapeDataString(Q)}")" Typo="Typo.body2">@T["User history"]</MudLink>
             </div>
-            @if (_result.Users.Count == 0) { <MudText Typo="Typo.body2">No match.</MudText> }
+            @if (_result.Users.Count == 0) { <MudText Typo="Typo.body2">@T["No match."]</MudText> }
             @foreach (var u in _result.Users)
             {
                 <div class="py-1">
                     <MudLink Href="@($"/history?tab=1&u.f={Uri.EscapeDataString("user:eq:" + u.Name)}")">@u.Name</MudLink>
                     @if (u.LoggedOnAt.Count > 0)
                     {
-                        <MudText Typo="Typo.caption" Inline="true" Class="ml-2">logged on at @string.Join(", ", u.LoggedOnAt)</MudText>
+                        <MudText Typo="Typo.caption" Inline="true" Class="ml-2">@T.F("logged on at {0}", string.Join(", ", u.LoggedOnAt))</MudText>
                     }
                 </div>
             }
@@ -54,10 +54,10 @@ else
 
         <MudPaper Outlined="true" Class="pa-3">
             <div class="d-flex align-center mb-2">
-                <MudIcon Icon="@Icons.Material.Filled.Campaign" Class="mr-2" /><MudText Typo="Typo.subtitle1">Announcements</MudText>
-                <MudSpacer /><MudLink Href="@($"/announcements?q={Uri.EscapeDataString(Q)}")" Typo="Typo.body2">Open in list</MudLink>
+                <MudIcon Icon="@Icons.Material.Filled.Campaign" Class="mr-2" /><MudText Typo="Typo.subtitle1">@T["Announcements"]</MudText>
+                <MudSpacer /><MudLink Href="@($"/announcements?q={Uri.EscapeDataString(Q)}")" Typo="Typo.body2">@T["Open in list"]</MudLink>
             </div>
-            @if (_result.Announcements.Count == 0) { <MudText Typo="Typo.body2">No match.</MudText> }
+            @if (_result.Announcements.Count == 0) { <MudText Typo="Typo.body2">@T["No match."]</MudText> }
             @foreach (var a in _result.Announcements)
             {
                 <div class="py-1"><MudLink Href="@($"/announcements/{a.Id}")">@a.Title</MudLink> <MudText Typo="Typo.caption" Inline="true">@Clock.Format(a.StartUtc)</MudText></div>

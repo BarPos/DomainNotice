@@ -54,6 +54,9 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ISettingsStore, SettingsStore>();
         services.AddSingleton<IAuditLog, AuditLog>();
+        services.AddSingleton<AppLanguage>();
+        services.AddSingleton<IAppLanguage>(sp => sp.GetRequiredService<AppLanguage>());
+        services.AddHostedService(sp => sp.GetRequiredService<AppLanguage>());
 
         services.AddAgentLink(config);
         services.AddAnnouncements(config);

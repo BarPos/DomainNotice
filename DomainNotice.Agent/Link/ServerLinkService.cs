@@ -498,6 +498,11 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
                 case Withdraw withdraw:
                     await _router.OnServerWithdrawAsync(withdraw, ct).ConfigureAwait(false);
                     break;
+                case AgentConfig config:
+                    var language = AppLanguages.Normalize(config.Language);
+                    _settings.SaveLanguage(language);
+                    await _router.SetLanguageAsync(language, ct).ConfigureAwait(false);
+                    break;
                 case ConfirmResult result:
                     await _router.OnServerConfirmResultAsync(result, envelope.ReplyTo, ct).ConfigureAwait(false);
                     break;

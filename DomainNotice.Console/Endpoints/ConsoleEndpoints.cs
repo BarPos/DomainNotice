@@ -1,6 +1,8 @@
 using DomainNotice.Console.Auth;
 using DomainNotice.Console.Grid;
 using DomainNotice.Console.Lists;
+using DomainNotice.Console.Services;
+using System.Text;
 using DomainNotice.Server.Abstractions;
 using DomainNotice.Server.Data;
 using DomainNotice.Shared;
@@ -103,7 +105,7 @@ internal static class ConsoleEndpoints
     }
 
     private static async Task<IResult> SetupAsync(HttpContext http, IAntiforgery antiforgery, IAdminSignInService signIn,
-        ILocalAccountService accounts)
+        ILocalAccountService accounts, Texts T)
     {
         if (!await signIn.IsFirstRunSetupAllowedAsync(http.RequestAborted)) return Results.NotFound();
         if (!await antiforgery.IsRequestValidAsync(http)) return Results.BadRequest();
@@ -111,33 +113,48 @@ internal static class ConsoleEndpoints
         var userName = form["username"].ToString().Trim();
         var password = form["password"].ToString();
         if (password != form["confirm"].ToString())
-            return Results.Redirect("/account/setup?error=" + Uri.EscapeDataString("The passwords do not match."));
+            return Results.Redirect("/account/setup?error=" + Uri.EscapeDataString(T["The passwords do not match."]));
         var result = await accounts.CreateFirstAsync(userName, password, http.RequestAborted);
         if (!result.Ok)
-            return Results.Redirect("/account/setup?error=" + Uri.EscapeDataString(result.Error ?? "The account could not be created."));
+            return Results.Redirect("/account/setup?error=" + Uri.EscapeDataString(T.Maybe(result.Error) ?? T["The account could not be created."]));
         return Results.Redirect(ConsoleAuth.LoginPath + "?created=1&source=local");
     }
 
     private static async Task<IResult> ExportGridAsync(string list, HttpContext http, IDbContextFactory<AppDbContext> dbFactory,
-        TimeProvider time, IServiceProvider services, CancellationToken ct)
+        TimeProvider time, IServiceProvider services, Texts T, CancellationToken ct)
     {
         if (!ConsoleLists.All.TryGetValue(list, out var grid)) return Results.NotFound();
         var query = GridQuery.Parse(http.Request.Query);
         var scope = grid.ScopeKeys.ToDictionary(k => k, k => (string?)http.Request.Query[k].ToString());
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var bytes = await grid.ExportCsvAsync(new GridContext(db, scope, time.GetUtcNow().UtcDateTime, services), query, ct);
+        var bytes = TranslateHeader(await grid.ExportCsvAsync(new GridContext(db, scope, time.GetUtcNow().UtcDateTime, services), query, ct), T);
         var stamp = time.GetUtcNow().UtcDateTime.ToString("yyyyMMdd-HHmm");
         return Results.File(bytes, "text/csv; charset=utf-8", $"{grid.Name}-{stamp}.csv");
     }
 
-    private static async Task<IResult> DownloadMsiAsync(IAgentPackageCache cache, CancellationToken ct)
+    /// <summary>
+    /// The header row of a grid CSV in the Console language (list labels are English in <see cref="ConsoleLists"/>).
+    /// Data rows stay as they are. No English label contains a comma or a quote, so a plain split is enough.
+    /// </summary>
+    private static byte[] TranslateHeader(byte[] csv, Texts T)
+    {
+        var preamble = Encoding.UTF8.GetPreamble();
+        var start = csv.AsSpan().StartsWith(preamble) ? preamble.Length : 0;
+        var end = csv.AsSpan(start).IndexOf("\r\n"u8);
+        if (end < 0) return csv;
+        var header = Encoding.UTF8.GetString(csv, start, end);
+        var translated = Csv.Write(header.Split(',').Select(label => T[label]), []);
+        return [.. translated, .. csv.AsSpan(start + end + 2)];
+    }
+
+    private static async Task<IResult> DownloadMsiAsync(IAgentPackageCache cache, Texts T, CancellationToken ct)
     {
         var package = await cache.GetCurrentAsync(ct);
-        if (package is null) return Results.NotFound("No agent package is cached for this server version.");
+        if (package is null) return Results.NotFound(T["No agent package is cached for this server version."]);
         return Results.Stream(cache.OpenRead(package), "application/x-msi", $"DomainNotice.Agent-{package.Version}-x64.msi");
     }
 
-    private static async Task<IResult> UploadMsiAsync(HttpContext http, IAntiforgery antiforgery, IAgentPackageCache cache)
+    private static async Task<IResult> UploadMsiAsync(HttpContext http, IAntiforgery antiforgery, IAgentPackageCache cache, Texts T)
     {
         if (!await antiforgery.IsRequestValidAsync(http)) return Results.BadRequest();
         string Back(string message, bool ok) =>
@@ -149,19 +166,19 @@ internal static class ConsoleEndpoints
         }
         catch (Exception ex) when (ex is InvalidDataException or BadHttpRequestException)
         {
-            return Results.Redirect(Back($"The file is larger than {MaxMsiBytes / (1024 * 1024)} MB.", false));
+            return Results.Redirect(Back(T.F("The file is larger than {0} MB.", MaxMsiBytes / (1024 * 1024)), false));
         }
         var file = form.Files["file"];
-        if (file is null || file.Length == 0) return Results.Redirect(Back("Choose an MSI file.", false));
-        if (!file.FileName.EndsWith(".msi", StringComparison.OrdinalIgnoreCase)) return Results.Redirect(Back("Only .msi files can be imported.", false));
-        if (file.Length > MaxMsiBytes) return Results.Redirect(Back("The file is too large.", false));
+        if (file is null || file.Length == 0) return Results.Redirect(Back(T["Choose an MSI file."], false));
+        if (!file.FileName.EndsWith(".msi", StringComparison.OrdinalIgnoreCase)) return Results.Redirect(Back(T["Only .msi files can be imported."], false));
+        if (file.Length > MaxMsiBytes) return Results.Redirect(Back(T["The file is too large."], false));
 
         var actor = http.User.Identity?.Name ?? "unknown";
         await using var stream = file.OpenReadStream();
         var result = await cache.ImportAsync(stream, Path.GetFileName(file.FileName), actor, http.RequestAborted);
         return Results.Redirect(result.Ok
-            ? Back($"Imported {Path.GetFileName(file.FileName)} for version {AppVersion.Current}.", true)
-            : Back(result.Error ?? "The package could not be imported.", false));
+            ? Back(T.F("Imported {0} for version {1}.", Path.GetFileName(file.FileName), AppVersion.Current), true)
+            : Back(T.Maybe(result.Error) ?? T["The package could not be imported."], false));
     }
 
     /// <summary>Only local paths ("/x", not "//host" or "/\host").</summary>

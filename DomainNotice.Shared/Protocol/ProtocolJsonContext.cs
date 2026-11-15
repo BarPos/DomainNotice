@@ -19,6 +19,7 @@ namespace DomainNotice.Shared.Protocol;
 [JsonSerializable(typeof(Confirm))]
 [JsonSerializable(typeof(ConfirmResult))]
 [JsonSerializable(typeof(Withdraw))]
+[JsonSerializable(typeof(AgentConfig))]
 [JsonSerializable(typeof(ProveIdentity))]
 [JsonSerializable(typeof(IdentityResult))]
 [JsonSerializable(typeof(UpdateAgent))]

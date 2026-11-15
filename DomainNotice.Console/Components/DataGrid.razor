@@ -14,34 +14,34 @@
 
 <MudPaper Outlined="true" Class="dn-grid">
     <div class="dn-grid-toolbar">
-        <MudTextField T="string" Value="_searchText" ValueChanged="SearchChanged" Placeholder="Search" DebounceInterval="400"
+        <MudTextField T="string" Value="_searchText" ValueChanged="SearchChanged" Placeholder="@T["Search"]" DebounceInterval="400"
                       Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined"
-                      Margin="Margin.Dense" Clearable="true" Class="dn-grid-search" aria-label="Search this list" />
-        <MudMenu StartIcon="@Icons.Material.Filled.FilterList" Label="Add filter" Variant="Variant.Text" Dense="true"
+                      Margin="Margin.Dense" Clearable="true" Class="dn-grid-search" aria-label="@T["Search this list"]" />
+        <MudMenu StartIcon="@Icons.Material.Filled.FilterList" Label="@T["Add filter"]" Variant="Variant.Text" Dense="true"
                  Disabled="@(!_fields.Any(f => f.Filterable))" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft"
-                 aria-label="Add a filter">
+                 aria-label="@T["Add a filter"]">
             @foreach (var f in _fields.Where(f => f.Filterable))
             {
-                <MudMenuItem OnClick="@(() => AddItem(f.Key))">@f.Label</MudMenuItem>
+                <MudMenuItem OnClick="@(() => AddItem(f.Key))">@T[f.Label]</MudMenuItem>
             }
         </MudMenu>
         @ToolbarContent
         <MudSpacer />
-        <MudMenu Icon="@Icons.Material.Filled.ViewColumn" Dense="true" AriaLabel="Choose columns" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
-            <MudText Typo="Typo.caption" Class="px-4 pt-2">Columns</MudText>
+        <MudMenu Icon="@Icons.Material.Filled.ViewColumn" Dense="true" AriaLabel="@T["Choose columns"]" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+            <MudText Typo="Typo.caption" Class="px-4 pt-2">@T["Columns"]</MudText>
             @foreach (var col in List.Columns)
             {
                 var visible = IsVisible(col);
                 <MudMenuItem AutoClose="false" OnClick="@(() => ToggleColumn(col))"
-                             Icon="@(visible ? Icons.Material.Filled.CheckBox : Icons.Material.Filled.CheckBoxOutlineBlank)">@col.Label</MudMenuItem>
+                             Icon="@(visible ? Icons.Material.Filled.CheckBox : Icons.Material.Filled.CheckBoxOutlineBlank)">@T[col.Label]</MudMenuItem>
             }
             <MudDivider />
-            <MudMenuItem OnClick="ResetColumns">Default columns</MudMenuItem>
+            <MudMenuItem OnClick="ResetColumns">@T["Default columns"]</MudMenuItem>
         </MudMenu>
-        <MudTooltip Text="Reload">
-            <MudIconButton Icon="@Icons.Material.Filled.Refresh" OnClick="ReloadAsync" aria-label="Reload" />
+        <MudTooltip Text="@T["Reload"]">
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" OnClick="ReloadClickedAsync" aria-label="@T["Reload"]" />
         </MudTooltip>
-        <MudTooltip Text="Export the filtered list as CSV">
+        <MudTooltip Text="@T["Export the filtered list as CSV"]">
             <MudButton Href="@ExportUrl" StartIcon="@Icons.Material.Filled.Download" Variant="Variant.Text" download="">CSV</MudButton>
         </MudTooltip>
     </div>
@@ -59,7 +59,7 @@
                                    OnApply="@(c => ApplyItem(item, c))" OnRemove="@(() => RemoveItem(item))" />
                 }
             }
-            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ClearFilters">Clear all</MudButton>
+            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ClearFilters">@T["Clear all"]</MudButton>
         </div>
     }
 
@@ -75,7 +75,7 @@
                 {
                     <th class="dn-check">
                         <MudCheckBox T="bool?" Value="HeaderChecked" ValueChanged="ToggleAllOnPage" TriState="true" Dense="true" Size="Size.Small"
-                                     aria-label="Select all rows on this page" />
+                                     aria-label="@T["Select all rows on this page"]" />
                     </th>
                 }
                 @foreach (var col in VisibleColumns)
@@ -84,7 +84,7 @@
                     var filterable = _fields.FirstOrDefault(f => f.Key == (col.SortField ?? col.Key) && f.Filterable);
                     <th class="@(sortable ? "dn-sortable" : "")" @onclick="@(() => SortBy(col, sortable))">
                         <span class="dn-th">
-                            @col.Label
+                            @T[col.Label]
                             @if (sortable && IsSortedBy(col))
                             {
                                 <MudIcon Icon="@(SortDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)" Size="Size.Small" />
@@ -92,7 +92,7 @@
                             @if (filterable is not null)
                             {
                                 <span @onclick:stopPropagation="true">
-                                    <MudIconButton Icon="@Icons.Material.Filled.FilterAlt" Size="Size.Small" Class="pa-0 ml-1" aria-label="@($"Filter {col.Label}")"
+                                    <MudIconButton Icon="@Icons.Material.Filled.FilterAlt" Size="Size.Small" Class="pa-0 ml-1" aria-label="@T.F("Filter {0}", T[col.Label])"
                                                    OnClick="@(() => FilterColumnAsync(filterable.Key))" />
                                 </span>
                             }
@@ -108,7 +108,7 @@
             }
             else if (_rows.Count == 0)
             {
-                <tr><td colspan="@ColumnCount" class="dn-grid-empty">@(_loaded ? "No items match." : "Loading…")</td></tr>
+                <tr><td colspan="@ColumnCount" class="dn-grid-empty">@(_loaded ? T["No items match."] : T["Loading…"])</td></tr>
             }
             @for (var index = 0; index < _rows.Count; index++)
             {
@@ -121,7 +121,7 @@
                     @if (Selectable)
                     {
                         <td class="dn-check" @onclick:stopPropagation="true">
-                            <MudCheckBox T="bool" Value="selected" ValueChanged="@(v => ToggleRow(row, v))" Dense="true" Size="Size.Small" aria-label="Select row" />
+                            <MudCheckBox T="bool" Value="selected" ValueChanged="@(v => ToggleRow(row, v))" Dense="true" Size="Size.Small" aria-label="@T["Select row"]" />
                         </td>
                     }
                     @foreach (var col in VisibleColumns)
@@ -136,10 +136,10 @@
     <div class="dn-grid-footer">
         <MudText Typo="Typo.body2">@RangeText</MudText>
         <MudSelect T="int" Value="_query.PageSize" ValueChanged="PageSizeChanged" Dense="true" Variant="Variant.Text" Margin="Margin.Dense"
-                   Style="max-width: 110px" aria-label="Rows per page">
+                   Style="max-width: 110px" aria-label="@T["Rows per page"]">
             @foreach (var size in GridQuery.PageSizes)
             {
-                <MudSelectItem Value="@size">@size per page</MudSelectItem>
+                <MudSelectItem Value="@size">@T.F("{0} per page", size)</MudSelectItem>
             }
         </MudSelect>
         <MudPagination Count="PageCount" Selected="_query.Page" SelectedChanged="PageChanged" Size="Size.Small" BoundaryCount="1" MiddleCount="3" />
@@ -148,13 +148,13 @@
     @if (Selectable && _selected.Count > 0)
     {
         <div class="dn-actionbar">
-            <MudText Typo="Typo.body2" Class="mr-2"><b>@_selected.Count</b> selected</MudText>
+            <MudText Typo="Typo.body2" Class="mr-2">@((MarkupString)T.F("<b>{0}</b> selected", _selected.Count))</MudText>
             @if (ActionBar is not null)
             {
                 @ActionBar(_selected.Values.ToList())
             }
             <MudSpacer />
-            <MudButton Variant="Variant.Text" OnClick="ClearSelection">Clear selection</MudButton>
+            <MudButton Variant="Variant.Text" OnClick="ClearSelection">@T["Clear selection"]</MudButton>
         </div>
     }
 </MudPaper>
@@ -183,6 +183,8 @@
     [Parameter] public RenderFragment<TRow>? ContextMenu { get; set; }
     [Parameter] public RenderFragment? ToolbarContent { get; set; }
     [Parameter] public EventCallback<TRow> OnRowClick { get; set; }
+    /// <summary>Raised after the Reload button reloaded the rows, so the page can refresh what it shows around the grid.</summary>
+    [Parameter] public EventCallback OnReloaded { get; set; }
     [Parameter] public Func<TRow, string?>? RowHref { get; set; }
 
     private GridQuery _query = new();
@@ -222,8 +224,8 @@
             : List.Columns.Where(c => c.DefaultVisible).ToList();
 
     private string RangeText => _total == 0
-        ? "0 items"
-        : $"{(_query.Page - 1) * _query.PageSize + 1}–{Math.Min(_total, _query.Page * _query.PageSize)} of {_total}";
+        ? T["0 items"]
+        : T.F("{0}–{1} of {2}", (_query.Page - 1) * _query.PageSize + 1, Math.Min(_total, _query.Page * _query.PageSize), _total);
 
     private bool? HeaderChecked
     {
@@ -324,6 +326,13 @@
             StateHasChanged();
         });
 
+    private async Task ReloadClickedAsync()
+    {
+        await LoadAsync();
+        if (OnReloaded.HasDelegate) await OnReloaded.InvokeAsync();
+        StateHasChanged();
+    }
+
     /// <summary>Reloads the current page (after an action).</summary>
     public async Task ReloadAsync()
     {
@@ -356,7 +365,7 @@
         catch (Exception ex)
         {
             Logger.LogError(ex, "Loading list {List} failed", List.Name);
-            _error = "The list could not be loaded. Try again, or remove a filter.";
+            _error = T["The list could not be loaded. Try again, or remove a filter."];
             _rows = [];
             _total = 0;
         }
@@ -538,7 +547,7 @@
                 builder.AddContent(3, Clock.Format(value as DateTime?));
                 break;
             case ColumnKind.Bool:
-                builder.AddContent(4, value is true ? "Yes" : "No");
+                builder.AddContent(4, value is true ? T["Yes"] : T["No"]);
                 break;
             case ColumnKind.Percent when value is double rate:
                 builder.OpenElement(5, "div");

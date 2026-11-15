@@ -22,6 +22,7 @@ public static class ProtocolCodec
         [Confirm.Type] = Ctx.Confirm,
         [ConfirmResult.Type] = Ctx.ConfirmResult,
         [Withdraw.Type] = Ctx.Withdraw,
+        [AgentConfig.Type] = Ctx.AgentConfig,
         [ProveIdentity.Type] = Ctx.ProveIdentity,
         [IdentityResult.Type] = Ctx.IdentityResult,
         [UpdateAgent.Type] = Ctx.UpdateAgent,

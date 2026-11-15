@@ -21,7 +21,8 @@ internal sealed class AgentUpdateCoordinator(
     IAgentPackageCache packages,
     PackageTransferManager transfers,
     TimeProvider time,
-    ILogger<AgentUpdateCoordinator> logger) : IAgentLifecycleObserver, IAgentMessageHandler
+    ILogger<AgentUpdateCoordinator> logger,
+    IServiceProvider services) : IAgentLifecycleObserver, IAgentMessageHandler
 {
     public const int MaxErrorLength = 2000;
     public const int MaxLogTailLength = 16 * 1024;
@@ -36,7 +37,13 @@ internal sealed class AgentUpdateCoordinator(
             .Where(t => t.ComputerId == connection.ComputerId && open.Contains(t.State))
             .OrderBy(t => t.CreatedAtUtc)
             .ToListAsync(ct);
-        if (tasks.Count == 0) return;
+        if (tasks.Count == 0)
+        {
+            // Settings → Agent install → "Update agents automatically": outdated agents are updated when they come online.
+            var updates = services.GetService(typeof(IAgentUpdateService)) as IAgentUpdateService;
+            if (updates is not null) await updates.AutoUpdateOnlineAgentAsync(connection.ComputerId, connection.AgentVersion, ct);
+            return;
+        }
 
         var now = time.GetUtcNow().UtcDateTime;
         AgentPackageInfo? package = null;

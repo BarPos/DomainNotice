@@ -25,6 +25,47 @@ public class AgentUpdateTests(PostgresFixture pg)
     }
 
     [Fact]
+    public async Task Automatic_updates_update_outdated_agents_when_they_come_online()
+    {
+        await using var kit = await UpdatesKit.CreateAsync(pg);
+        await kit.SeedPackageAsync();
+        var pc = await kit.AddComputerAsync("0.9.0");
+        var connection = new FakeConnection(pc, "0.9.0");
+        kit.Hub.Connections[pc] = connection;
+
+        // Off (default): coming online does nothing.
+        Assert.False(await kit.AgentUpdates.GetAutoUpdateAsync(Ct));
+        await kit.Coordinator.OnAgentOnlineAsync(connection, Ct);
+        await using (var db = kit.Db.CreateContext()) Assert.Equal(0, await db.AgentUpdateTasks.CountAsync(Ct));
+
+        // On: the Console setting wins over Agents:AutoUpdate, and the agent gets its task + UpdateAgent at once.
+        Assert.True((await kit.AgentUpdates.SetAutoUpdateAsync(true, "alice", Ct)).Ok);
+        Assert.True(await kit.AgentUpdates.GetAutoUpdateAsync(Ct));
+        await using (var db = kit.Db.CreateContext())
+        {
+            var task = await db.AgentUpdateTasks.SingleAsync(Ct); // turning it on covered the online agent
+            Assert.Equal(AgentUpdateService.AutoActor, task.RequestedBy);
+        }
+        Assert.Contains(connection.Sent, m => m is UpdateAgent);
+
+        // A failed automatic update is not retried on the next connect (no reinstall loop).
+        await using (var db = kit.Db.CreateContext())
+        {
+            var task = await db.AgentUpdateTasks.SingleAsync(Ct);
+            task.State = AgentUpdateState.Failed;
+            task.UpdatedAtUtc = kit.Time.GetUtcNow().UtcDateTime;
+            await db.SaveChangesAsync(Ct);
+        }
+        await kit.Coordinator.OnAgentOnlineAsync(connection, Ct);
+        await using (var db = kit.Db.CreateContext()) Assert.Equal(1, await db.AgentUpdateTasks.CountAsync(Ct));
+
+        // A current agent is never touched.
+        var current = await kit.AddComputerAsync(AppVersion.Current);
+        await kit.Coordinator.OnAgentOnlineAsync(new FakeConnection(current, AppVersion.Current), Ct);
+        await using (var db = kit.Db.CreateContext()) Assert.Equal(0, await db.AgentUpdateTasks.CountAsync(t => t.ComputerId == current, Ct));
+    }
+
+    [Fact]
     public async Task Request_creates_one_open_task_per_outdated_computer_and_sends_when_online()
     {
         await using var kit = await UpdatesKit.CreateAsync(pg);

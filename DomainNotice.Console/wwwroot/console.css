@@ -18,6 +18,9 @@ body { margin: 0; }
                                                               height: 40px; line-height: 40px; }
 .dn-appbar-search .mud-input-adornment { align-self: center; height: 40px; }
 .dn-appbar-search input::placeholder, .dn-appbar-search input.mud-input-root::placeholder { color: rgba(255, 255, 255, 0.72) !important; opacity: 1 !important; }
+/* Typed text: white on the dark bar (MudBlazor would use its dark text colour, grey on grey). */
+.dn-appbar-search .mud-input, .dn-appbar-search input, .dn-appbar-search input.mud-input-root { color: #ffffff !important; caret-color: #ffffff; -webkit-text-fill-color: #ffffff; }
+.dn-appbar-search .mud-input:focus-within { background: rgba(255, 255, 255, 0.20); }
 .dn-appbar-search .mud-input-adornment .mud-icon-root { color: rgba(255, 255, 255, 0.85); }
 @media (max-width: 700px) { .dn-appbar-search { min-width: 0; flex-basis: 160px; } }
 
@@ -87,7 +90,8 @@ body { margin: 0; }
 .dn-step-num { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
     font-size: 0.8rem; background: rgba(127, 127, 127, 0.25); }
 .dn-step-active .dn-step-num { background: #4d94ff; color: #fff; }
-.dn-content-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.dn-content-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.dn-preview-col { position: sticky; top: 72px; }
 @media (max-width: 1200px) { .dn-content-split { grid-template-columns: minmax(0, 1fr); } }
 
 /* Preview styled like the agent's announcement window (always the same light window, as on the PC). */
@@ -109,6 +113,7 @@ body { margin: 0; }
 .dn-agent-button { padding: 6px 18px; border: 1px solid #8a99a8; background: #ffffff; border-radius: 3px; font: inherit; color: #1b1f23; }
 .dn-agent-button-primary { background: #1e6fd9; border-color: #1e6fd9; color: #ffffff; }
 .dn-agent-countdown { font-size: 0.8rem; color: #5b6670; margin-right: auto; align-self: center; }
+.dn-agent-anonymous { display: block; margin-top: 2px; }
 
 /* ---------- side-by-side approval ---------- */
 .dn-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }

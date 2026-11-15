@@ -80,5 +80,15 @@ agent. The target is always the server's own version.
    `Agents:UpdateTimeoutMinutes`, it is **Failed**, with the end of the MSI log when the agent sends one.
 
 Limits: one task per computer, `Agents:MaxParallelUpdates` transfers at once, and an optional bandwidth cap. Tasks
-are listed under **Agent updates**. With `Agents:AutoUpdate = true` the server creates the tasks by itself after
-its own update.
+are listed under **Agent updates**.
+
+### Automatic agent updates
+
+**Settings → Agent install → Update agents automatically.** When it is on:
+- every agent older than the server gets an update task as soon as it is online, and the server sends it at once;
+- turning it on covers the agents online at that moment; the others are updated when they connect;
+- after a server update, outdated agents are updated the same way.
+
+The agent package for the server's version must be cached (downloaded from the release, or imported in Settings).
+A computer whose automatic update failed is retried after 24 hours, so a broken install does not loop. The Console
+setting overrides `Agents:AutoUpdate` from the configuration file.

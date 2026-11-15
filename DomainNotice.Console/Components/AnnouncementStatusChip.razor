@@ -1,4 +1,4 @@
-<MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="ChipColor">@Status</MudChip>
+<MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="ChipColor">@StatusText</MudChip>
 
 @code {
     [Parameter] public AnnouncementStatus Status { get; set; }
@@ -9,5 +9,14 @@
         AnnouncementStatus.Scheduled => Color.Info,
         AnnouncementStatus.Draft => Color.Default,
         _ => Color.Secondary,
+    };
+
+    private string StatusText => Status switch
+    {
+        AnnouncementStatus.Draft => T["Draft"],
+        AnnouncementStatus.Scheduled => T["Scheduled"],
+        AnnouncementStatus.Active => T["Active"],
+        AnnouncementStatus.Ended => T["Ended"],
+        _ => Status.ToString(),
     };
 }

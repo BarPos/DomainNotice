@@ -14,14 +14,14 @@
 <MudLayout>
     <MudAppBar Elevation="1" Dense="true" Class="dn-appbar">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="@(() => _drawerOpen = !_drawerOpen)"
-                       aria-label="Collapse or expand the navigation" />
+                       aria-label="@T["Collapse or expand the navigation"]" />
         <MudIcon Icon="@Icons.Material.Filled.Campaign" Class="ml-2 mr-2" />
         <MudText Typo="Typo.h6" Class="dn-brand">DomainNotice</MudText>
         <MudSpacer />
         <div class="dn-appbar-search">
-            <MudTextField T="string" @bind-Value="_search" Placeholder="Search computers, users, announcements" Variant="Variant.Text"
+            <MudTextField T="string" @bind-Value="_search" Placeholder="@T["Search computers, users, announcements"]" Variant="Variant.Text"
                           Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" AdornmentColor="Color.Inherit"
-                          Immediate="true" OnKeyUp="SearchKeyUp" Underline="false" Class="px-2" aria-label="Global search" />
+                          Immediate="true" OnKeyUp="SearchKeyUp" Underline="false" Class="px-2" aria-label="@T["Global search"]" />
         </div>
         <MudSpacer />
         <AuthorizeView>
@@ -29,12 +29,12 @@
                 <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Class="ml-2 mr-1" />
                 <MudText Typo="Typo.body2" Class="mr-1">@(context.User.FindFirst(ConsoleAuth.DisplayNameClaim)?.Value ?? context.User.Identity?.Name)</MudText>
                 <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Inherit" Class="mr-2">
-                    @(context.User.IsAdmin() ? "Admin" : "Read-only")
+                    @(context.User.IsAdmin() ? T["Admin"] : T["Read-only"])
                 </MudChip>
                 <form method="post" action="/account/logout" class="d-inline">
                     <AntiforgeryToken />
-                    <MudTooltip Text="Sign out">
-                        <MudIconButton ButtonType="ButtonType.Submit" Icon="@Icons.Material.Filled.Logout" Color="Color.Inherit" aria-label="Sign out" />
+                    <MudTooltip Text="@T["Sign out"]">
+                        <MudIconButton ButtonType="ButtonType.Submit" Icon="@Icons.Material.Filled.Logout" Color="Color.Inherit" aria-label="@T["Sign out"]" />
                     </MudTooltip>
                 </form>
             </Authorized>

@@ -26,6 +26,7 @@ clicked and how they answered optional (single or multiple choice, optionally an
   - domain sign-in, with local backup accounts;
   - automatic AD linking of computers (Kerberos proof or name).
 - **Inventory:** current IPs, users, and name, user and IP history, with configurable retention.
+- **English and Polish:** one language for the Console and all agents, set in the Console.
 - **Results:**
   - read confirmations and answers, with CSV export;
   - anonymous answers unlinkable to users and times.

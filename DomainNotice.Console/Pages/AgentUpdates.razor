@@ -4,14 +4,14 @@
 @inject ISnackbar Snackbar
 @inject IDialogService Dialogs
 
-<PageTitle>Agent updates · DomainNotice</PageTitle>
+<PageTitle>@T["Agent updates"] · DomainNotice</PageTitle>
 
 <div class="dn-page-title">
-    <MudText Typo="Typo.h5">Agent updates</MudText>
-    <MudText Typo="Typo.body2">Agents always update to the server's version (@AppVersion.Current).</MudText>
+    <MudText Typo="Typo.h5">@T["Agent updates"]</MudText>
+    <MudText Typo="Typo.body2">@T.F("Agents always update to the server's version ({0}).", AppVersion.Current)</MudText>
     <MudSpacer />
     <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.SystemUpdateAlt" OnClick="UpdateAllAsync">Update all outdated</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.SystemUpdateAlt" OnClick="UpdateAllAsync">@T["Update all outdated"]</MudButton>
     </AuthorizeView>
 </div>
 
@@ -23,7 +23,8 @@
     private Dictionary<string, RenderFragment<AgentUpdateRow>> _cells => new()
     {
         ["computer"] = r => @<MudLink Href="@($"/computers/{r.ComputerId}")">@r.ComputerName</MudLink>,
-        ["state"] = r => @<MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@StateColor(r.State)">@r.State</MudChip>,
+        ["error"] = r => @<span>@T.Maybe(r.Error)</span>,
+        ["state"] = r => @<MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@StateColor(r.State)">@T[r.State.ToString()]</MudChip>,
     };
 
     private static Color StateColor(AgentUpdateState s) => s switch
@@ -35,13 +36,13 @@
     };
 
     private RenderFragment<IReadOnlyList<AgentUpdateRow>> _actionBar => rows => @<AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
-        <MudButton StartIcon="@Icons.Material.Filled.Cancel" OnClick="@(() => CancelAsync(rows))" Disabled="@(!rows.Any(r => r.IsOpen))">Cancel</MudButton>
+        <MudButton StartIcon="@Icons.Material.Filled.Cancel" OnClick="@(() => CancelAsync(rows))" Disabled="@(!rows.Any(r => r.IsOpen))">@T["Cancel"]</MudButton>
     </AuthorizeView>;
 
     private RenderFragment<AgentUpdateRow> _contextMenu => row => @<text>
-        <MudMenuItem Icon="@Icons.Material.Filled.Computer" Href="@($"/computers/{row.ComputerId}")">Computer</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.Computer" Href="@($"/computers/{row.ComputerId}")">@T["Computer"]</MudMenuItem>
         <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
-            <MudMenuItem Icon="@Icons.Material.Filled.Cancel" Disabled="@(!row.IsOpen)" OnClick="@(() => CancelAsync([row]))">Cancel task</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Cancel" Disabled="@(!row.IsOpen)" OnClick="@(() => CancelAsync([row]))">@T["Cancel task"]</MudMenuItem>
         </AuthorizeView>
     </text>;
 
@@ -50,15 +51,15 @@
         if (await Me.RequireAdminAsync() is not { } actor) return;
         var open = rows.Where(r => r.IsOpen).ToList();
         if (open.Count == 0) return;
-        if (!await PromptDialog.ConfirmAsync(Dialogs, "Cancel update tasks", $"Cancel {open.Count} open update task(s)?", "Cancel tasks")) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, T["Cancel update tasks"], T.F("Cancel {0} open update task(s)?", open.Count), T["Cancel tasks"])) return;
         var ok = 0;
         foreach (var row in open)
         {
             var result = await AgentUpdateService.CancelAsync(row.Id, actor);
             if (result.Ok) ok++;
-            else Snackbar.Add($"{row.ComputerName}: {result.Error}", Severity.Error);
+            else Snackbar.Add($"{row.ComputerName}: {T.Maybe(result.Error)}", Severity.Error);
         }
-        if (ok > 0) Snackbar.Add($"{ok} task(s) cancelled.", Severity.Success);
+        if (ok > 0) Snackbar.Add(T.F("{0} task(s) cancelled.", ok), Severity.Success);
         _grid?.ClearSelection();
         if (_grid is not null) await _grid.ReloadAsync();
     }
@@ -66,9 +67,9 @@
     private async Task UpdateAllAsync()
     {
         if (await Me.RequireAdminAsync() is not { } actor) return;
-        if (!await PromptDialog.ConfirmAsync(Dialogs, "Update all outdated agents", $"Send the update command to every outdated agent (to {AppVersion.Current})?", "Update all")) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, T["Update all outdated agents"], T.F("Send the update command to every outdated agent (to {0})?", AppVersion.Current), T["Update all"])) return;
         var (result, created) = await AgentUpdateService.RequestUpdateAllOutdatedAsync(actor);
-        Snackbar.Add(result.Ok ? $"{created} update task(s) created." : result.Error ?? "Failed.", result.Ok ? Severity.Success : Severity.Error);
+        Snackbar.Add(result.Ok ? T.F("{0} update task(s) created.", created) : T.Maybe(result.Error) ?? T["Failed."], result.Ok ? Severity.Success : Severity.Error);
         if (_grid is not null) await _grid.ReloadAsync();
     }
 }

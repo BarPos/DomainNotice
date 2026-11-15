@@ -79,6 +79,13 @@ this.
 6. **Reconnects:** with exponential backoff. An agent newer than the server retries every hour and shows "The server
    is older than this agent".
 
+## Language
+
+The tray and the windows use the language set in the Console (**Settings → General**), English or Polish. The server
+sends it when the agent connects and whenever it changes. The agent stores it in the registry (`Language`), so the tray
+is right even before it connects. Announcement content is shown as written. For announcements with anonymous answers,
+the window's footer tells the user that their answers are anonymous.
+
 ## Files and registry
 
 | Location | |

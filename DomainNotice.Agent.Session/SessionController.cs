@@ -47,6 +47,7 @@ internal sealed class SessionController : IDisposable
                 break;
             case ConnectionStatus status:
                 _status = status;
+                if (AgentTexts.SetLanguage(status.Language)) _tray?.Relabel();
                 UpdateStatus();
                 break;
             case ServiceStopping:
@@ -164,7 +165,7 @@ internal sealed class SessionController : IDisposable
     }
 
     private void ShowAbout() =>
-        System.Windows.MessageBox.Show(TrayHost.AboutText(_tray?.StatusText ?? ""), "About DomainNotice",
+        System.Windows.MessageBox.Show(TrayHost.AboutText(_tray?.StatusText ?? ""), AgentTexts.Get("About DomainNotice"),
             System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
 
     private void UpdateStatus()
@@ -172,18 +173,20 @@ internal sealed class SessionController : IDisposable
         if (_tray is null) return;
         if (!_pipeConnected)
         {
-            _tray.SetStatus("Waiting for the DomainNotice Agent service", NoticeIconState.Disconnected);
+            _tray.SetStatus(AgentTexts.Get("Waiting for the DomainNotice Agent service"), NoticeIconState.Disconnected);
             return;
         }
 
         var status = _status;
-        var server = string.IsNullOrWhiteSpace(status?.ServerName) ? "the server" : status!.ServerName;
+        var server = string.IsNullOrWhiteSpace(status?.ServerName) ? AgentTexts.Get("the server") : status!.ServerName;
         if (status is { Connected: true })
-            _tray.SetStatus($"Connected to {server}", NoticeIconState.Connected);
+            _tray.SetStatus(AgentTexts.F("Connected to {0}", server), NoticeIconState.Connected);
         else if (status?.Message == LocalStatusMessages.ServerOlder)
-            _tray.SetStatus(LocalStatusMessages.ServerOlder, NoticeIconState.Warning);
+            _tray.SetStatus(AgentTexts.Get(LocalStatusMessages.ServerOlder), NoticeIconState.Warning);
         else
-            _tray.SetStatus(string.IsNullOrWhiteSpace(status?.Message) ? $"Not connected to {server}" : $"Not connected to {server}: {status!.Message}",
+            _tray.SetStatus(string.IsNullOrWhiteSpace(status?.Message)
+                    ? AgentTexts.F("Not connected to {0}", server)
+                    : AgentTexts.F("Not connected to {0}: {1}", server, AgentTexts.Get(status!.Message)),
                 NoticeIconState.Disconnected);
     }
 

@@ -43,8 +43,15 @@ account only while no directory is configured and no local account exists; other
 | **History** | Name, user and IP history across all computers |
 | **Agent updates** | Update tasks and their state |
 | **Directory** | Synced AD tree, sync status, **Sync now**, bind password, test connection; shows AD computers without an agent |
-| **Settings** | Enrolment (install password, requirement, awaiting-approval policy), Agent install (fingerprint, `msiexec` line, MSI download/upload), History (retention), Local accounts, **Announcement window** (text to the right of the title, with a preview), About and updates |
+| **Settings** | **General** (language of the Console and the agents), Enrolment (install password, requirement, awaiting-approval policy), Agent install (**automatic agent updates**, fingerprint, `msiexec` line, MSI download/upload), History (retention), Local accounts, **Announcement window** (text to the right of the title, with a preview), About and updates |
 | **Audit log** | Who created, edited or deleted announcements, revoked computers, changed settings, signed in |
+
+## Language
+
+The Console and the agents use one language for the whole installation: **English** or **Polish**. Set it in
+**Settings → General**. Every admin's Console switches, and so do the tray and announcement windows on every PC. Online
+agents switch at once; offline ones switch when they next connect. Dates and numbers follow the language too.
+Announcement content is shown as written.
 
 ## Grids, search and filters
 
@@ -57,5 +64,6 @@ Every list uses the same server-side grid:
 - row checkboxes with an **action bar** at the bottom, and a right-click menu.
 
 The current filter, sort and page are **stored in the URL**, so a view can be bookmarked or shared. **Export CSV**
-exports the whole filtered result, not only the visible page. The search box in the top bar searches computers,
+exports the whole filtered result, not only the visible page. **Reload** also refreshes what the page shows around the
+grid, such as the answer charts on an announcement's results. The search box in the top bar searches computers,
 users and announcements.

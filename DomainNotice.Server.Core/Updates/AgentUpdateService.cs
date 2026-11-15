@@ -48,9 +48,49 @@ internal sealed class AgentUpdateService(
     IAgentHub hub,
     IAuditLog audit,
     TimeProvider time,
-    ILogger<AgentUpdateService> logger) : IAgentUpdateService
+    ILogger<AgentUpdateService> logger,
+    ISettingsStore settings,
+    Microsoft.Extensions.Options.IOptions<Options.AgentsOptions> agentsOptions) : IAgentUpdateService
 {
     private readonly SemaphoreSlim _createLock = new(1, 1);
+    public const string AutoActor = "system (automatic update)";
+    /// <summary>An automatic update that failed is not retried automatically for this long (no reinstall loop).</summary>
+    public static readonly TimeSpan AutoRetryAfterFailure = TimeSpan.FromHours(24);
+
+    public async Task<bool> GetAutoUpdateAsync(CancellationToken ct = default)
+    {
+        var value = await settings.GetAsync(SettingKeys.AgentsAutoUpdate, ct);
+        return bool.TryParse(value, out var enabled) ? enabled : agentsOptions.Value.AutoUpdate;
+    }
+
+    public async Task<OperationResult> SetAutoUpdateAsync(bool enabled, string actor, CancellationToken ct = default)
+    {
+        await settings.SetAsync(SettingKeys.AgentsAutoUpdate, enabled ? "true" : "false", actor, ct);
+        await audit.WriteAsync(actor, AuditActions.SettingChanged, "Setting", SettingKeys.AgentsAutoUpdate, enabled ? "on" : "off", ct);
+        if (!enabled) return OperationResult.Success;
+        var online = hub.OnlineComputerIds.ToList();
+        if (online.Count == 0 || await packages.GetCurrentAsync(ct) is null) return OperationResult.Success;
+        var (result, created) = await RequestUpdateAsync(online, AutoActor, ct);
+        if (result.Ok && created > 0) logger.LogInformation("Automatic updates turned on: {Created} online agent(s) are being updated", created);
+        return OperationResult.Success;
+    }
+
+    public async Task AutoUpdateOnlineAgentAsync(Guid computerId, string? agentVersion, CancellationToken ct = default)
+    {
+        if (!AppVersion.IsAgentOutdated(agentVersion) || !await GetAutoUpdateAsync(ct)) return;
+        if (await packages.GetCurrentAsync(ct) is null) return;
+        await using (var db = await dbFactory.CreateDbContextAsync(ct))
+        {
+            var since = time.GetUtcNow().UtcDateTime - AutoRetryAfterFailure;
+            var failedRecently = await db.AgentUpdateTasks.AsNoTracking().AnyAsync(t =>
+                t.ComputerId == computerId && t.ToVersion == AppVersion.Current && t.State == AgentUpdateState.Failed &&
+                t.UpdatedAtUtc >= since, ct);
+            if (failedRecently) return;
+        }
+        var (result, created) = await RequestUpdateAsync([computerId], AutoActor, ct);
+        if (!result.Ok) logger.LogWarning("Automatic update of computer {ComputerId} not started: {Error}", computerId, result.Error);
+        else if (created > 0) logger.LogInformation("Automatic update of computer {ComputerId} to {Version} started", computerId, AppVersion.Current);
+    }
 
     public async Task<(OperationResult Result, int Created)> RequestUpdateAsync(IReadOnlyCollection<Guid> computerIds, string actor,
         CancellationToken ct = default)

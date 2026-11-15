@@ -24,6 +24,10 @@ public static class SettingKeys
     public const string DirectoryHighestUsnPrefix = "Directory.HighestUsn.";
     /// <summary>Text shown to the right of the title in the announcement window. Unset = "DomainNotice".</summary>
     public const string AnnouncementHeaderText = "Announcements.HeaderText";
+    /// <summary>"true"/"false": update outdated agents automatically when online. Overrides Agents:AutoUpdate when set.</summary>
+    public const string AgentsAutoUpdate = "Agents.AutoUpdate";
+    /// <summary>Language of the Console and the agents ("en", "pl"). Unset = English.</summary>
+    public const string Language = "App.Language";
     /// <summary>JSON of the last release check (Updates).</summary>
     public const string UpdatesLastCheck = "Updates.LastCheck";
 }
@@ -33,6 +37,18 @@ public enum AwaitingApprovalPolicy
     /// <summary>Default: Everyone and User announcements only.</summary>
     EveryoneAndUser = 0,
     Nothing = 1,
+}
+
+/// <summary>
+/// The installation's language (Console and agents), Settings → General. <see cref="Current"/> is loaded at start and
+/// kept in memory, so the Console can read it while rendering.
+/// </summary>
+public interface IAppLanguage
+{
+    string Current { get; }
+    Task<OperationResult> SetAsync(string language, string actor, CancellationToken ct = default);
+    /// <summary>Raised after the language changed (agents are told, open Consoles re-render).</summary>
+    event Action<string>? Changed;
 }
 
 /// <summary>P3 audit log.</summary>

@@ -62,6 +62,40 @@ public sealed class AnnouncementRouter
     /// Sets the link (null when down) and the status shown in the tray. When the link goes down, confirms in
     /// flight are answered with a rejection; when it comes up, Shown reports that could not be sent are flushed.
     /// </summary>
+    private string? _language;
+
+    /// <summary>Language for the Session UIs ("en", "pl"); sent with every ConnectionStatus.</summary>
+    public string? Language
+    {
+        get { lock (_gate) return _language; }
+    }
+
+    /// <summary>The server set the language (AgentConfig): remember it and tell every Session UI.</summary>
+    public async Task SetLanguageAsync(string language, CancellationToken ct)
+    {
+        List<ISessionEndpoint> endpoints;
+        ConnectionStatus status;
+        lock (_gate)
+        {
+            if (_language == language) return;
+            _language = language;
+            status = _status = _status with { Language = language };
+            endpoints = [.. _endpoints];
+        }
+        foreach (var endpoint in endpoints)
+            await SafeSendAsync(endpoint, status, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Language known before the server is reached (stored from the last connection).</summary>
+    public void InitializeLanguage(string? language)
+    {
+        lock (_gate)
+        {
+            _language = language;
+            _status = _status with { Language = language };
+        }
+    }
+
     public async Task SetLinkAsync(IServerSender? server, ConnectionStatus status, CancellationToken ct)
     {
         List<ISessionEndpoint> endpoints;
@@ -70,6 +104,7 @@ public sealed class AnnouncementRouter
         lock (_gate)
         {
             _server = server;
+            status = status with { Language = _language };
             _status = status;
             endpoints = [.. _endpoints];
             if (server is null)
@@ -111,6 +146,7 @@ public sealed class AnnouncementRouter
         List<ISessionEndpoint> endpoints;
         lock (_gate)
         {
+            status = status with { Language = _language };
             _status = status;
             endpoints = [.. _endpoints];
         }

@@ -61,7 +61,12 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(paths);
 builder.Services.AddSingleton<AgentSettingsStore>();
 builder.Services.AddSingleton<StatusTrigger>();
-builder.Services.AddSingleton(sp => new AnnouncementRouter(sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(sp =>
+{
+    var router = new AnnouncementRouter(sp.GetRequiredService<TimeProvider>());
+    router.InitializeLanguage(sp.GetRequiredService<AgentSettingsStore>().LoadLanguage());
+    return router;
+});
 builder.Services.AddSingleton<AgentUpdater>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ISessionsSource>(sp => sp.GetRequiredService<SessionManager>());

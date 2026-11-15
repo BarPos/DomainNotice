@@ -63,16 +63,23 @@ internal sealed class UpdatesKit : IAsyncDisposable
         Microsoft.Extensions.Options.Options.Create(AgentsOptions), Db, Time, NullLogger<PackageTransferManager>.Instance);
 
     public AgentUpdateService AgentUpdates => _agentUpdates ??=
-        new AgentUpdateService(Db, Cache, Transfers, Hub, Audit, Time, NullLogger<AgentUpdateService>.Instance);
+        new AgentUpdateService(Db, Cache, Transfers, Hub, Audit, Time, NullLogger<AgentUpdateService>.Instance, Settings,
+            Microsoft.Extensions.Options.Options.Create(AgentsOptions));
 
     public AgentUpdateCoordinator Coordinator => _coordinator ??=
-        new AgentUpdateCoordinator(Db, Cache, Transfers, Time, NullLogger<AgentUpdateCoordinator>.Instance);
+        new AgentUpdateCoordinator(Db, Cache, Transfers, Time, NullLogger<AgentUpdateCoordinator>.Instance, new KitServices(this));
+
+    /// <summary>Resolves IAgentUpdateService lazily, like the host does for the coordinator.</summary>
+    private sealed class KitServices(UpdatesKit kit) : IServiceProvider
+    {
+        public object? GetService(Type serviceType) => serviceType == typeof(IAgentUpdateService) ? kit.AgentUpdates : null;
+    }
 
     public AgentUpdateTimeoutService TimeoutJob() =>
         new(Db, Transfers, Microsoft.Extensions.Options.Options.Create(AgentsOptions), Time, NullLogger<AgentUpdateTimeoutService>.Instance);
 
     public UpdatesBackgroundService Background() => new(Server, Cache, AgentUpdates, Releases, Settings,
-        Microsoft.Extensions.Options.Options.Create(UpdatesOptions), Microsoft.Extensions.Options.Options.Create(AgentsOptions), Time,
+        Microsoft.Extensions.Options.Options.Create(UpdatesOptions), Time,
         NullLogger<UpdatesBackgroundService>.Instance);
 
     public async Task<Guid> AddComputerAsync(string agentVersion, bool revoked = false)

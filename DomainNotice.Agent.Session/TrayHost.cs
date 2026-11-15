@@ -14,21 +14,23 @@ internal sealed class TrayHost : IDisposable
     private readonly Forms.NotifyIcon _icon;
     private readonly Forms.ToolStripMenuItem _status;
     private readonly Forms.ToolStripMenuItem _showPending;
-    private string _statusText = "Starting";
+    private readonly Forms.ToolStripMenuItem _about;
+    private string _statusText = AgentTexts.Get("Starting");
+    private int _pending;
 
     public TrayHost(Action showPending, Action about)
     {
         _status = new Forms.ToolStripMenuItem(_statusText) { Enabled = false };
-        _showPending = new Forms.ToolStripMenuItem("Show pending announcement") { Visible = false };
+        _showPending = new Forms.ToolStripMenuItem(AgentTexts.Get("Show pending announcement")) { Visible = false };
         _showPending.Click += (_, _) => showPending();
-        var aboutItem = new Forms.ToolStripMenuItem("About");
-        aboutItem.Click += (_, _) => about();
+        _about = new Forms.ToolStripMenuItem(AgentTexts.Get("About"));
+        _about.Click += (_, _) => about();
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add(_status);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(_showPending);
-        menu.Items.Add(aboutItem);
+        menu.Items.Add(_about);
 
         _icon = new Forms.NotifyIcon
         {
@@ -53,16 +55,24 @@ internal sealed class TrayHost : IDisposable
 
     public void SetPending(int count)
     {
+        _pending = count;
         _showPending.Visible = count > 0;
-        _showPending.Text = count > 1 ? $"Show pending announcement ({count})" : "Show pending announcement";
+        _showPending.Text = count > 1 ? AgentTexts.F("Show pending announcement ({0})", count) : AgentTexts.Get("Show pending announcement");
+    }
+
+    /// <summary>The language changed: relabel the menu (the status line is set again by the caller).</summary>
+    public void Relabel()
+    {
+        _about.Text = AgentTexts.Get("About");
+        SetPending(_pending);
     }
 
     public void Notify(string text) =>
         _icon.ShowBalloonTip(8000, "DomainNotice", text, Forms.ToolTipIcon.Info);
 
     public static string AboutText(string status) =>
-        $"DomainNotice Agent {AppVersion.Current}\n\nStatus: {status}\n\nAnnouncements from your organisation are shown here. " +
-        "This program runs as part of the DomainNotice Agent service.";
+        AgentTexts.F("DomainNotice Agent {0}\n\nStatus: {1}\n\nAnnouncements from your organisation are shown here. This program runs as part of the DomainNotice Agent service.",
+            AppVersion.Current, status);
 
     public void Dispose()
     {

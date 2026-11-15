@@ -124,6 +124,8 @@ public sealed record AnnouncementPayload
     public string Title { get; init; } = "";
     /// <summary>Text to the right of the title (Console setting). Added in 1.0.3; null from older servers.</summary>
     public string? HeaderText { get; init; }
+    /// <summary>Language of the window texts ("en", "pl"). Added in 1.0.4; null from older servers.</summary>
+    public string? Language { get; init; }
     public string BodyMarkdown { get; init; } = "";
     public int MinDismissSeconds { get; init; }
     public UnlockMode UnlockMode { get; init; }
@@ -178,6 +180,17 @@ public sealed record Withdraw : IAgentMessage
 {
     public static string Type => "Withdraw";
     public Guid DeliveryId { get; init; }
+}
+
+/// <summary>
+/// S→A (AgentConfig). Installation-wide settings for the agent, sent after Welcome and whenever they change (added in 1.0.4;
+/// older agents ignore it).
+/// </summary>
+public sealed record AgentConfig : IAgentMessage
+{
+    public static string Type => "AgentConfig";
+    /// <summary>Language of the tray and the windows ("en", "pl").</summary>
+    public string Language { get; init; } = AppLanguages.Default;
 }
 
 // ---- Identity --------------------------------------------------------------------------------

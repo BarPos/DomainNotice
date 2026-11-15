@@ -1,6 +1,6 @@
 @* Preview styled like the agent's announcement window. Html must come from IAnnouncementService.RenderPreviewHtml
    (Markdig with raw HTML disabled) — the only place the Console renders HTML built from user content. *@
-<div class="dn-agent-window" aria-label="Preview of the agent window">
+<div class="dn-agent-window" aria-label="@T["Preview of the agent window"]">
     <div class="dn-agent-titlebar">
         <span class="dn-agent-title">@Title</span>
         <span class="dn-agent-header-text">@HeaderText</span>
@@ -24,7 +24,13 @@
         </div>
     }
     <div class="dn-agent-buttons">
-        <span class="dn-agent-countdown">@UnlockText</span>
+        <span class="dn-agent-countdown">
+            @UnlockText
+            @if (Anonymous)
+            {
+                <span class="dn-agent-anonymous">@T["Your answers in this announcement are anonymous."]</span>
+            }
+        </span>
         @for (var i = 0; i < Buttons.Count; i++)
         {
             <button type="button" class="dn-agent-button @(i == 0 ? "dn-agent-button-primary" : "")" disabled>@Buttons[i]</button>
@@ -42,11 +48,13 @@
     [Parameter] public IReadOnlyList<QuestionEdit> Questions { get; set; } = [];
     [Parameter] public int MinSeconds { get; set; }
     [Parameter] public UnlockMode UnlockMode { get; set; }
+    /// <summary>Anonymous answers: the footer tells the user so.</summary>
+    [Parameter] public bool Anonymous { get; set; }
 
     private string UnlockText => UnlockMode switch
     {
-        UnlockMode.AfterTime => $"Buttons unlock after {MinSeconds} s",
-        UnlockMode.AfterRequired => "Buttons unlock when required questions are answered",
-        _ => $"Buttons unlock after {MinSeconds} s and required answers",
+        UnlockMode.AfterTime => T.F("Buttons unlock after {0} s", MinSeconds),
+        UnlockMode.AfterRequired => T["Buttons unlock when required questions are answered"],
+        _ => T.F("Buttons unlock after {0} s and required answers", MinSeconds),
     };
 }

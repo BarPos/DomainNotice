@@ -9,11 +9,11 @@
 @inject IDialogService Dialogs
 @inject BrowserClock Clock
 
-<PageTitle>@(_computer?.Name ?? "Computer") · DomainNotice</PageTitle>
+<PageTitle>@(_computer?.Name ?? T["Computer"]) · DomainNotice</PageTitle>
 
 @if (_loaded && _computer is null)
 {
-    <MudAlert Severity="Severity.Warning">This computer does not exist (it may have been deleted). <MudLink Href="/computers">Back to computers</MudLink></MudAlert>
+    <MudAlert Severity="Severity.Warning">@T["This computer does not exist (it may have been deleted)."] <MudLink Href="/computers">@T["Back to computers"]</MudLink></MudAlert>
 }
 else if (_computer is null)
 {
@@ -23,75 +23,75 @@ else
 {
     var c = _computer;
     <div class="dn-page-title">
-        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Href="/computers" aria-label="Back to computers" />
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Href="/computers" aria-label="@T["Back to computers"]" />
         <StatusDot Status="@(c.IsRevoked ? StatusKind.Revoked : c.Online ? StatusKind.Online : StatusKind.Offline)" ShowLabel="true" />
         <MudText Typo="Typo.h5">@c.Name</MudText>
         @if (c.IsReplaced)
         {
-            <MudChip T="string" Size="Size.Small">Replaced by <MudLink Href="@($"/computers/{c.ReplacedByComputerId}")" Class="ml-1">newer record</MudLink></MudChip>
+            <MudChip T="string" Size="Size.Small">@T["Replaced by"] <MudLink Href="@($"/computers/{c.ReplacedByComputerId}")" Class="ml-1">@T["newer record"]</MudLink></MudChip>
         }
         <MudSpacer />
         <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
-            <MudButton StartIcon="@Icons.Material.Filled.SystemUpdateAlt" Variant="Variant.Outlined" Disabled="@(!AppVersion.IsAgentOutdated(c.AgentVersion))" OnClick="UpdateAsync">Update agent</MudButton>
-            <MudButton StartIcon="@Icons.Material.Filled.Campaign" Variant="Variant.Outlined" OnClick="SendAnnouncement">Send announcement</MudButton>
-            <MudButton StartIcon="@Icons.Material.Filled.Block" Variant="Variant.Outlined" Color="Color.Error" Disabled="c.IsRevoked" OnClick="RevokeAsync">Revoke</MudButton>
-            <MudButton StartIcon="@Icons.Material.Filled.Delete" Variant="Variant.Outlined" Color="Color.Error" OnClick="DeleteAsync">Delete</MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.SystemUpdateAlt" Variant="Variant.Outlined" Disabled="@(!AppVersion.IsAgentOutdated(c.AgentVersion))" OnClick="UpdateAsync">@T["Update agent"]</MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.Campaign" Variant="Variant.Outlined" OnClick="SendAnnouncement">@T["Send announcement"]</MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.Block" Variant="Variant.Outlined" Color="Color.Error" Disabled="c.IsRevoked" OnClick="RevokeAsync">@T["Revoke"]</MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.Delete" Variant="Variant.Outlined" Color="Color.Error" OnClick="DeleteAsync">@T["Delete"]</MudButton>
         </AuthorizeView>
     </div>
 
     @if (_chain.Count > 1)
     {
-        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">History includes @(_chain.Count - 1) replaced record(s) of this machine.</MudAlert>
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">@T.F("History includes {0} replaced record(s) of this machine.", _chain.Count - 1)</MudAlert>
     }
 
     <MudTabs Outlined="true" Rounded="true" ActivePanelIndex="Tab" ActivePanelIndexChanged="TabChanged" KeepPanelsAlive="false" TabPanelsClass="pa-4">
-        <MudTabPanel Text="Overview">
+        <MudTabPanel Text="@T["Overview"]">
             <dl class="dn-kv">
-                <dt>Name</dt><dd>@c.Name</dd>
-                <dt>DNS name</dt><dd>@c.DnsName</dd>
-                <dt>Remote IP</dt><dd>@c.RemoteIp</dd>
-                <dt>Local IPs</dt><dd>@string.Join(", ", c.LocalIps)</dd>
-                <dt>Current users</dt>
+                <dt>@T["Name"]</dt><dd>@c.Name</dd>
+                <dt>@T["DNS name"]</dt><dd>@c.DnsName</dd>
+                <dt>@T["Remote IP"]</dt><dd>@c.RemoteIp</dd>
+                <dt>@T["Local IPs"]</dt><dd>@string.Join(", ", c.LocalIps)</dd>
+                <dt>@T["Current users"]</dt>
                 <dd>
-                    @if (c.Sessions.Count == 0) { <span>None</span> }
+                    @if (c.Sessions.Count == 0) { <span>@T["None"]</span> }
                     @foreach (var s in c.Sessions.OrderBy(s => s.UserName))
                     {
-                        <div>@s.UserName <MudText Typo="Typo.caption" Inline="true">(@s.State, since @Clock.Format(s.LogonAtUtc))</MudText></div>
+                        <div>@s.UserName <MudText Typo="Typo.caption" Inline="true">@T.F("({0}, since {1})", SessionLabel(s.State), Clock.Format(s.LogonAtUtc))</MudText></div>
                     }
                 </dd>
-                <dt>Agent version</dt>
-                <dd>@c.AgentVersion @if (AppVersion.IsAgentOutdated(c.AgentVersion)) { <MudChip T="string" Size="Size.Small" Color="Color.Warning">outdated</MudChip> }</dd>
-                <dt>OS</dt><dd>@c.OsVersion</dd>
-                <dt>Last seen</dt><dd>@Clock.Format(c.LastSeenAtUtc)</dd>
-                <dt>Enrolled</dt><dd>@Clock.Format(c.EnrolledAtUtc)</dd>
-                <dt>AD link</dt>
+                <dt>@T["Agent version"]</dt>
+                <dd>@c.AgentVersion @if (AppVersion.IsAgentOutdated(c.AgentVersion)) { <MudChip T="string" Size="Size.Small" Color="Color.Warning">@T["outdated"]</MudChip> }</dd>
+                <dt>@T["OS"]</dt><dd>@c.OsVersion</dd>
+                <dt>@T["Last seen"]</dt><dd>@Clock.Format(c.LastSeenAtUtc)</dd>
+                <dt>@T["Enrolled"]</dt><dd>@Clock.Format(c.EnrolledAtUtc)</dd>
+                <dt>@T["AD link"]</dt>
                 <dd>
-                    @GridField.Humanize(c.AdLinkState.ToString())
+                    @T[GridField.Humanize(c.AdLinkState.ToString())]
                     @if (_adDn is not null) { <div class="dn-mono">@_adDn</div> }
-                    @if (c.AdLinkedAtUtc is not null) { <MudText Typo="Typo.caption">linked @Clock.Format(c.AdLinkedAtUtc)</MudText> }
-                    @if (c.AdLinkState == AdLinkState.AwaitingApproval) { <div><MudLink Href="/computers/awaiting">Decide in Awaiting approval</MudLink></div> }
+                    @if (c.AdLinkedAtUtc is not null) { <MudText Typo="Typo.caption">@T.F("linked {0}", Clock.Format(c.AdLinkedAtUtc))</MudText> }
+                    @if (c.AdLinkState == AdLinkState.AwaitingApproval) { <div><MudLink Href="/computers/awaiting">@T["Decide in Awaiting approval"]</MudLink></div> }
                 </dd>
-                <dt>Key fingerprint</dt><dd class="dn-mono">@KeyFingerprint.Display(c.AgentKeyFingerprint)</dd>
+                <dt>@T["Key fingerprint"]</dt><dd class="dn-mono">@KeyFingerprint.Display(c.AgentKeyFingerprint)</dd>
                 @if (c.IsRevoked)
                 {
-                    <dt>Revoked</dt><dd>@Clock.Format(c.RevokedAtUtc) by @c.RevokedBy</dd>
+                    <dt>@T["Revoked"]</dt><dd>@T.F("{0} by {1}", Clock.Format(c.RevokedAtUtc), c.RevokedBy)</dd>
                 }
             </dl>
         </MudTabPanel>
-        <MudTabPanel Text="Name history">
+        <MudTabPanel Text="@T["Name history"]">
             <DataGrid TRow="NameHistoryRow" List="ConsoleLists.NameHistory" Prefix="n." Scope="_scope" />
         </MudTabPanel>
-        <MudTabPanel Text="User history">
+        <MudTabPanel Text="@T["User history"]">
             <DataGrid TRow="UserHistoryRow" List="ConsoleLists.UserHistory" Prefix="u." Scope="_scope" />
         </MudTabPanel>
-        <MudTabPanel Text="IP history">
-            <DataGrid TRow="IpHistoryRow" List="ConsoleLists.IpHistory" Prefix="i." Scope="_scope" />
+        <MudTabPanel Text="@T["IP history"]">
+            <DataGrid TRow="IpHistoryRow" List="ConsoleLists.IpHistory" Prefix="i." Scope="_scope" Cells="_ipCells" />
         </MudTabPanel>
-        <MudTabPanel Text="Announcements">
-            <MudText Typo="Typo.subtitle1" Class="mb-2">Deliveries</MudText>
+        <MudTabPanel Text="@T["Announcements"]">
+            <MudText Typo="Typo.subtitle1" Class="mb-2">@T["Deliveries"]</MudText>
             <DataGrid TRow="DeliveryRow" List="ConsoleLists.Deliveries" Prefix="d." Scope="_scope"
                       RowHref="@(r => $"/announcements/{r.AnnouncementId}")" />
-            <MudText Typo="Typo.subtitle1" Class="mt-6 mb-2">Confirmations</MudText>
+            <MudText Typo="Typo.subtitle1" Class="mt-6 mb-2">@T["Confirmations"]</MudText>
             <DataGrid TRow="ConfirmationRow" List="ConsoleLists.Confirmations" Prefix="c." Scope="_scope"
                       RowHref="@(r => $"/announcements/{r.AnnouncementId}")" />
         </MudTabPanel>
@@ -109,6 +109,18 @@ else
     private Dictionary<string, string?> _scope = new();
 
     private int Tab => Math.Clamp(TabParam ?? 0, 0, 4);
+
+    private string SessionLabel(SessionState state) => state switch
+    {
+        SessionState.Disconnected => T["disconnected"],
+        SessionState.Locked => T["locked"],
+        _ => T["active"],
+    };
+
+    private Dictionary<string, RenderFragment<IpHistoryRow>> _ipCells => new()
+    {
+        ["kind"] = r => @<span>@T[r.Kind.ToString()]</span>,
+    };
 
     protected override async Task OnParametersSetAsync()
     {
@@ -139,7 +151,7 @@ else
     {
         if (await Me.RequireAdminAsync() is not { } actor) return;
         var (result, created) = await AgentUpdates.RequestUpdateAsync([Id], actor);
-        Snackbar.Add(result.Ok ? (created > 0 ? "Update task created." : "No task created (up to date or a task is already open).") : result.Error ?? "Failed.",
+        Snackbar.Add(result.Ok ? (created > 0 ? T["Update task created."] : T["No task created (up to date or a task is already open)."]) : T.Maybe(result.Error) ?? T["Failed."],
             result.Ok ? Severity.Success : Severity.Error);
     }
 
@@ -153,22 +165,22 @@ else
     private async Task RevokeAsync()
     {
         if (await Me.RequireAdminAsync() is not { } actor) return;
-        if (!await PromptDialog.ConfirmAsync(Dialogs, "Revoke computer", $"Revoke {_computer?.Name}? Its key is refused from now on.", "Revoke")) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, T["Revoke computer"], T.F("Revoke {0}? Its key is refused from now on.", _computer?.Name), T["Revoke"])) return;
         var result = await ComputerAdmin.RevokeAsync(Id, actor);
-        Snackbar.Add(result.Ok ? "Computer revoked." : result.Error ?? "Failed.", result.Ok ? Severity.Success : Severity.Error);
+        Snackbar.Add(result.Ok ? T["Computer revoked."] : T.Maybe(result.Error) ?? T["Failed."], result.Ok ? Severity.Success : Severity.Error);
         await LoadAsync();
     }
 
     private async Task DeleteAsync()
     {
         if (await Me.RequireAdminAsync() is not { } actor) return;
-        if (!await PromptDialog.ConfirmAsync(Dialogs, "Delete computer", $"Delete {_computer?.Name} and its history?", "Delete")) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, T["Delete computer"], T.F("Delete {0} and its history?", _computer?.Name), T["Delete"])) return;
         var result = await ComputerAdmin.DeleteAsync(Id, actor);
         if (result.Ok)
         {
-            Snackbar.Add("Computer deleted.", Severity.Success);
+            Snackbar.Add(T["Computer deleted."], Severity.Success);
             Nav.NavigateTo("/computers");
         }
-        else Snackbar.Add(result.Error ?? "Failed.", Severity.Error);
+        else Snackbar.Add(T.Maybe(result.Error) ?? T["Failed."], Severity.Error);
     }
 }

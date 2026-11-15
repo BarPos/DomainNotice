@@ -3,17 +3,17 @@
 @* Targets for an announcement: users, groups, computers and OUs from the synced directory (tree + search), enrolled
    computers, or typed names when no directory is configured. Targets are stored by objectGUID / ComputerId. *@
 
-<MudText Typo="Typo.subtitle1">Selected targets</MudText>
+<MudText Typo="Typo.subtitle1">@T["Selected targets"]</MudText>
 @if (Targets.Count == 0)
 {
-    <MudAlert Severity="Severity.Info" Dense="true" Class="my-2">No targets: the announcement goes to <b>everyone</b>.</MudAlert>
+    <MudAlert Severity="Severity.Info" Dense="true" Class="my-2">@((MarkupString)T["No targets: the announcement goes to <b>everyone</b>."])</MudAlert>
 }
 else
 {
     <div class="d-flex flex-wrap gap-1 my-2">
         @foreach (var t in Targets.ToList())
         {
-            var label = $"{(string.IsNullOrWhiteSpace(t.DisplayName) ? t.Value : t.DisplayName)} ({KindLabel(t.Kind)})";
+            var label = $"{(string.IsNullOrWhiteSpace(t.DisplayName) ? t.Value : t.DisplayName)} ({KindLabel(t.Kind, T)})";
             @if (ReadOnly)
             {
                 <MudChip T="string" Icon="@KindIcon(t.Kind)" Variant="Variant.Outlined" Color="Color.Primary">@label</MudChip>
@@ -25,14 +25,14 @@ else
         }
     </div>
 }
-<MudText Typo="Typo.caption">Any matching target is enough. Group membership comes from the synced directory (nested groups count).</MudText>
+<MudText Typo="Typo.caption">@T["Any matching target is enough. Group membership comes from the synced directory (nested groups count)."]</MudText>
 
 @if (!ReadOnly)
 {
     <MudTabs Outlined="true" Class="mt-4" TabPanelsClass="pa-3" @bind-ActivePanelIndex="_tab">
         @if (_directory)
         {
-            <MudTabPanel Text="Directory">
+            <MudTabPanel Text="@T["Directory"]">
                 <div class="dn-split">
                     <MudPaper Outlined="true" Class="dn-tree pa-2" Style="max-height: 360px">
                         <MudTreeView T="Guid" SelectedValue="_ou" SelectedValueChanged="OuSelected" SelectionMode="SelectionMode.SingleSelection" Dense="true" Hover="true">
@@ -40,14 +40,14 @@ else
                         </MudTreeView>
                     </MudPaper>
                     <div>
-                        <MudTextField T="string" Value="_search" ValueChanged="SearchAsync" Placeholder="Search users, groups, computers, OUs"
+                        <MudTextField T="string" Value="_search" ValueChanged="SearchAsync" Placeholder="@T["Search users, groups, computers, OUs"]"
                                       DebounceInterval="300" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
                                       Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" />
                         <MudSimpleTable Dense="true" Hover="true" Class="mt-2">
                             <tbody>
                                 @if (_results.Count == 0)
                                 {
-                                    <tr><td class="dn-grid-empty">@(_ou == Guid.Empty && string.IsNullOrWhiteSpace(_search) ? "Choose an OU or search." : "Nothing found.")</td></tr>
+                                    <tr><td class="dn-grid-empty">@(_ou == Guid.Empty && string.IsNullOrWhiteSpace(_search) ? T["Choose an OU or search."] : T["Nothing found."])</td></tr>
                                 }
                                 @foreach (var r in _results)
                                 {
@@ -61,17 +61,17 @@ else
                                             @switch (r.Kind)
                                             {
                                                 case DirectoryObjectKind.User:
-                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.User))">Add user</MudButton>
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.User))">@T["Add user"]</MudButton>
                                                     break;
                                                 case DirectoryObjectKind.Computer:
-                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.Computer))">Add computer</MudButton>
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.Computer))">@T["Add computer"]</MudButton>
                                                     break;
                                                 case DirectoryObjectKind.Group:
-                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.UserGroup))">Add as user group</MudButton>
-                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.ComputerGroup))">as computer group</MudButton>
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.UserGroup))">@T["Add as user group"]</MudButton>
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.ComputerGroup))">@T["as computer group"]</MudButton>
                                                     break;
                                                 default:
-                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.OrganizationalUnit))">Add OU</MudButton>
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.OrganizationalUnit))">@T["Add OU"]</MudButton>
                                                     break;
                                             }
                                         </td>
@@ -83,8 +83,8 @@ else
                 </div>
             </MudTabPanel>
         }
-        <MudTabPanel Text="Enrolled computers">
-            <MudTextField T="string" Value="_computerSearch" ValueChanged="SearchComputersAsync" Placeholder="Computer name"
+        <MudTabPanel Text="@T["Enrolled computers"]">
+            <MudTextField T="string" Value="_computerSearch" ValueChanged="SearchComputersAsync" Placeholder="@T["Computer name"]"
                           DebounceInterval="300" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
                           Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" />
             <MudSimpleTable Dense="true" Hover="true" Class="mt-2">
@@ -96,7 +96,7 @@ else
                             <td>@c.Name</td>
                             <td><MudText Typo="Typo.caption">@c.RemoteIp</MudText></td>
                             <td style="text-align:right">
-                                <MudButton Size="Size.Small" OnClick="@(() => Add(new TargetEdit { Kind = TargetKind.Computer, ComputerId = c.Id, DisplayName = c.Name }))">Add</MudButton>
+                                <MudButton Size="Size.Small" OnClick="@(() => Add(new TargetEdit { Kind = TargetKind.Computer, ComputerId = c.Id, DisplayName = c.Name }))">@T["Add"]</MudButton>
                             </td>
                         </tr>
                     }
@@ -105,20 +105,20 @@ else
         </MudTabPanel>
         @if (!_directory)
         {
-            <MudTabPanel Text="Typed name">
+            <MudTabPanel Text="@T["Typed name"]">
                 <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
-                    No directory is configured. User and computer names are matched as typed; <b>group and OU targets never match</b> until a directory is set up.
+                    @((MarkupString)T["No directory is configured. User and computer names are matched as typed; <b>group and OU targets never match</b> until a directory is set up."])
                 </MudAlert>
                 <div class="d-flex flex-wrap gap-2 align-end">
-                    <MudSelect T="TargetKind" Label="Kind" @bind-Value="_typedKind" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px">
+                    <MudSelect T="TargetKind" Label="@T["Kind"]" @bind-Value="_typedKind" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px">
                         @foreach (var k in Enum.GetValues<TargetKind>())
                         {
-                            <MudSelectItem Value="@k">@KindLabel(k)</MudSelectItem>
+                            <MudSelectItem Value="@k">@KindLabel(k, T)</MudSelectItem>
                         }
                     </MudSelect>
-                    <MudTextField T="string" Label="@(_typedKind == TargetKind.User ? "DOMAIN\\user" : "Name")" @bind-Value="_typedValue"
+                    <MudTextField T="string" Label="@(_typedKind == TargetKind.User ? T["DOMAIN\\user"] : T["Name"])" @bind-Value="_typedValue"
                                   Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" />
-                    <MudButton Variant="Variant.Outlined" OnClick="AddTyped" Disabled="@string.IsNullOrWhiteSpace(_typedValue)">Add</MudButton>
+                    <MudButton Variant="Variant.Outlined" OnClick="AddTyped" Disabled="@string.IsNullOrWhiteSpace(_typedValue)">@T["Add"]</MudButton>
                 </div>
             </MudTabPanel>
         }
@@ -240,13 +240,13 @@ else
         await TargetsChanged.InvokeAsync();
     }
 
-    public static string KindLabel(TargetKind k) => k switch
+    public static string KindLabel(TargetKind k, Texts T) => k switch
     {
-        TargetKind.User => "User",
-        TargetKind.Computer => "Computer",
-        TargetKind.UserGroup => "User group",
-        TargetKind.ComputerGroup => "Computer group",
-        TargetKind.OrganizationalUnit => "OU",
+        TargetKind.User => T["User"],
+        TargetKind.Computer => T["Computer"],
+        TargetKind.UserGroup => T["User group"],
+        TargetKind.ComputerGroup => T["Computer group"],
+        TargetKind.OrganizationalUnit => T["OU"],
         _ => k.ToString(),
     };
 

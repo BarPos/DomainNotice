@@ -4,25 +4,25 @@
 @attribute [ExcludeFromInteractiveRouting]
 @* Reachable only while IAdminSignInService.IsFirstRunSetupAllowedAsync is true (a middleware returns 404 otherwise). *@
 
-<PageTitle>First-run setup · DomainNotice</PageTitle>
+<PageTitle>@T["First-run setup"] · DomainNotice</PageTitle>
 
-<h1>First-run setup</h1>
-<p class="dn-sub">No directory and no local account are configured. Create the first local administrator account.</p>
+<h1>@T["First-run setup"]</h1>
+<p class="dn-sub">@T["No directory and no local account are configured. Create the first local administrator account."]</p>
 
 @if (!string.IsNullOrEmpty(Error))
 {
-    <div class="dn-account-error" role="alert">@Error</div>
+    <div class="dn-account-error" role="alert">@T[Error]</div>
 }
 
 <form method="post" action="/account/setup">
     <AntiforgeryToken />
-    <label for="username">User name</label>
+    <label for="username">@T["User name"]</label>
     <input id="username" name="username" type="text" autocomplete="username" required autofocus maxlength="128" />
-    <label for="password">Password (at least 8 characters)</label>
+    <label for="password">@T["Password (at least 8 characters)"]</label>
     <input id="password" name="password" type="password" autocomplete="new-password" required minlength="8" maxlength="1024" />
-    <label for="confirm">Repeat the password</label>
+    <label for="confirm">@T["Repeat the password"]</label>
     <input id="confirm" name="confirm" type="password" autocomplete="new-password" required minlength="8" maxlength="1024" />
-    <button type="submit">Create account</button>
+    <button type="submit">@T["Create account"]</button>
 </form>
 
 @code {

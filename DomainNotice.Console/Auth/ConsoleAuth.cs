@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using DomainNotice.Console.Services;
 using DomainNotice.Server.Abstractions;
 using DomainNotice.Server.Data;
 using Microsoft.AspNetCore.Authentication;
@@ -89,7 +90,7 @@ internal sealed class ConsoleRevalidatingAuthStateProvider(ILoggerFactory logger
 /// The signed-in Console user for components. Every mutating handler calls <see cref="RequireAdminAsync"/> first:
 /// hidden buttons are not enforcement (P4).
 /// </summary>
-public sealed class ConsoleUser(AuthenticationStateProvider authState, ISnackbar snackbar)
+public sealed class ConsoleUser(AuthenticationStateProvider authState, ISnackbar snackbar, Texts T)
 {
     public async Task<ClaimsPrincipal> PrincipalAsync() => (await authState.GetAuthenticationStateAsync()).User;
 
@@ -102,7 +103,7 @@ public sealed class ConsoleUser(AuthenticationStateProvider authState, ISnackbar
     {
         var user = await PrincipalAsync();
         if (user.IsAdmin()) return user.Identity!.Name ?? "unknown";
-        snackbar.Add("Read-only access: this action needs the Admin role.", Severity.Warning);
+        snackbar.Add(T["Read-only access: this action needs the Admin role."], Severity.Warning);
         return null;
     }
 }

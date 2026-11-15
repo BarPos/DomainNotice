@@ -9,12 +9,12 @@
 @inject BrowserClock Clock
 @inject ILogger<Dashboard> Logger
 
-<PageTitle>Dashboard · DomainNotice</PageTitle>
+<PageTitle>@T["Dashboard"] · DomainNotice</PageTitle>
 
 <div class="dn-page-title">
-    <MudText Typo="Typo.h5">Dashboard</MudText>
+    <MudText Typo="Typo.h5">@T["Dashboard"]</MudText>
     <MudSpacer />
-    <MudIconButton Icon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" aria-label="Reload" />
+    <MudIconButton Icon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" aria-label="@T["Reload"]" />
 </div>
 
 @if (_data is null)
@@ -25,62 +25,62 @@ else
 {
     <div class="dn-tiles">
         <MudPaper Outlined="true" Class="dn-tile">
-            <MudText Typo="Typo.subtitle2">Computers</MudText>
+            <MudText Typo="Typo.subtitle2">@T["Computers"]</MudText>
             <div class="d-flex gap-6 mt-2">
                 <div>
                     <div class="dn-tile-number"><StatusDot Status="StatusKind.Online" /> @_data.Online</div>
-                    <MudLink Href="/computers?f=online:eq:true" Typo="Typo.body2">online</MudLink>
+                    <MudLink Href="/computers?f=online:eq:true" Typo="Typo.body2">@T["online"]</MudLink>
                 </div>
                 <div>
                     <div class="dn-tile-number"><StatusDot Status="StatusKind.Offline" /> @_data.Offline</div>
-                    <MudLink Href="/computers?f=online:eq:false" Typo="Typo.body2">offline</MudLink>
+                    <MudLink Href="/computers?f=online:eq:false" Typo="Typo.body2">@T["offline"]</MudLink>
                 </div>
             </div>
         </MudPaper>
 
         <MudPaper Outlined="true" Class="dn-tile">
-            <MudText Typo="Typo.subtitle2">Outdated agents</MudText>
+            <MudText Typo="Typo.subtitle2">@T["Outdated agents"]</MudText>
             <div class="dn-tile-number mt-2">@_data.Outdated</div>
-            <MudText Typo="Typo.body2">older than the server (@AppVersion.Current)</MudText>
+            <MudText Typo="Typo.body2">@T.F("older than the server ({0})", AppVersion.Current)</MudText>
             <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
                 <MudButton Class="mt-3" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.SystemUpdateAlt"
-                           Disabled="@(_data.Outdated == 0 || _busy)" OnClick="UpdateAllAsync">Update all</MudButton>
+                           Disabled="@(_data.Outdated == 0 || _busy)" OnClick="UpdateAllAsync">@T["Update all"]</MudButton>
             </AuthorizeView>
         </MudPaper>
 
         <MudPaper Outlined="true" Class="dn-tile">
-            <MudText Typo="Typo.subtitle2">Awaiting approval</MudText>
+            <MudText Typo="Typo.subtitle2">@T["Awaiting approval"]</MudText>
             <div class="dn-tile-number mt-2">@_data.Awaiting</div>
-            <MudLink Href="/computers/awaiting" Typo="Typo.body2">re-imaged or duplicate computers to decide</MudLink>
+            <MudLink Href="/computers/awaiting" Typo="Typo.body2">@T["re-imaged or duplicate computers to decide"]</MudLink>
         </MudPaper>
 
         <MudPaper Outlined="true" Class="dn-tile">
-            <MudText Typo="Typo.subtitle2">Directory sync</MudText>
+            <MudText Typo="Typo.subtitle2">@T["Directory sync"]</MudText>
             @if (_data.Directory is not { Configured: true } dir)
             {
-                <MudText Class="mt-2">No directory is configured.</MudText>
+                <MudText Class="mt-2">@T["No directory is configured."]</MudText>
             }
             else
             {
-                <MudText Typo="Typo.h6" Class="mt-2">@(dir.LastSuccessUtc is null ? "Never" : Clock.Format(dir.LastSuccessUtc))</MudText>
-                <MudText Typo="Typo.body2">@(dir.Running ? "Sync running…" : $"{dir.ObjectCount} objects")</MudText>
+                <MudText Typo="Typo.h6" Class="mt-2">@(dir.LastSuccessUtc is null ? T["Never"] : Clock.Format(dir.LastSuccessUtc))</MudText>
+                <MudText Typo="Typo.body2">@(dir.Running ? T["Sync running…"] : T.F("{0} objects", dir.ObjectCount))</MudText>
                 @if (dir.LastError is not null)
                 {
-                    <MudText Typo="Typo.body2" Color="Color.Error">Last error: @dir.LastError</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Error">@T.F("Last error: {0}", T.Maybe(dir.LastError))</MudText>
                 }
             }
-            <MudLink Href="/directory" Typo="Typo.body2">Directory</MudLink>
+            <MudLink Href="/directory" Typo="Typo.body2">@T["Directory"]</MudLink>
         </MudPaper>
 
         <MudPaper Outlined="true" Class="dn-tile dn-tile-wide">
             <div class="d-flex align-center">
-                <MudText Typo="Typo.subtitle2">Active announcements</MudText>
+                <MudText Typo="Typo.subtitle2">@T["Active announcements"]</MudText>
                 <MudSpacer />
-                <MudLink Href="/announcements?f=status:eq:Active" Typo="Typo.body2">All active</MudLink>
+                <MudLink Href="/announcements?f=status:eq:Active" Typo="Typo.body2">@T["All active"]</MudLink>
             </div>
             @if (_data.Active.Count == 0)
             {
-                <MudText Class="mt-2">No announcement is active right now.</MudText>
+                <MudText Class="mt-2">@T["No announcement is active right now."]</MudText>
             }
             @foreach (var a in _data.Active)
             {
@@ -89,7 +89,7 @@ else
                     <div class="d-flex">
                         <MudLink Href="@($"/announcements/{a.Id}")">@a.Title</MudLink>
                         <MudSpacer />
-                        <MudText Typo="Typo.body2">@a.Confirmed of @a.Delivered users confirmed · ends @Clock.Format(a.EndUtc)</MudText>
+                        <MudText Typo="Typo.body2">@T.F("{0} of {1} users confirmed · ends {2}", a.Confirmed, a.Delivered, Clock.Format(a.EndUtc))</MudText>
                     </div>
                     <MudProgressLinear Value="rate" Color="Color.Success" Rounded="true" Size="Size.Medium" Class="mt-1" />
                 </div>
@@ -135,14 +135,14 @@ else
     private async Task UpdateAllAsync()
     {
         if (await Me.RequireAdminAsync() is not { } actor) return;
-        if (!await PromptDialog.ConfirmAsync(Dialogs, "Update all outdated agents",
-                $"Send the update command to {_data?.Outdated} outdated agents? They update to version {AppVersion.Current}.", "Update all")) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, T["Update all outdated agents"],
+                T.F("Send the update command to {0} outdated agents? They update to version {1}.", _data?.Outdated, AppVersion.Current), T["Update all"])) return;
         _busy = true;
         try
         {
             var (result, created) = await AgentUpdates.RequestUpdateAllOutdatedAsync(actor);
-            if (result.Ok) Snackbar.Add($"{created} update task(s) created.", Severity.Success);
-            else Snackbar.Add(result.Error ?? "The update could not be started.", Severity.Error);
+            if (result.Ok) Snackbar.Add(T.F("{0} update task(s) created.", created), Severity.Success);
+            else Snackbar.Add(T.Maybe(result.Error) ?? T["The update could not be started."], Severity.Error);
         }
         finally
         {

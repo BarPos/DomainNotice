@@ -1,3 +1,6 @@
+using DomainNotice.Shared;
+using Microsoft.AspNetCore.Localization;
+using System.Globalization;
 using DomainNotice.Console.Auth;
 using DomainNotice.Console.Endpoints;
 using DomainNotice.Console.Services;
@@ -79,6 +82,7 @@ public static class ConsoleHostingExtensions
         services.AddScoped<AuthenticationStateProvider, ConsoleRevalidatingAuthStateProvider>();
         services.AddScoped<ConsoleUser>();
         services.AddScoped<BrowserClock>();
+        services.AddSingleton<Texts>();
         services.AddScoped<AnnouncementHandoff>();
 
         return services;
@@ -92,6 +96,22 @@ public static class ConsoleHostingExtensions
             app.UseExceptionHandler("/error", createScopeForErrors: true);
             app.UseHsts();
         }
+
+        // Dates, numbers and built-in component texts follow the installation's language (Settings → General).
+        // Blazor circuits take the culture of the request that starts them, so a language change applies on reload.
+        var cultures = AppLanguages.All.Select(l => new CultureInfo(AppLanguages.CultureName(l))).ToList();
+        app.UseRequestLocalization(o =>
+        {
+            o.DefaultRequestCulture = new RequestCulture(AppLanguages.CultureName(AppLanguages.Default));
+            o.SupportedCultures = cultures;
+            o.SupportedUICultures = cultures;
+            o.RequestCultureProviders.Clear();
+            o.RequestCultureProviders.Add(new CustomRequestCultureProvider(ctx =>
+            {
+                var language = ctx.RequestServices.GetRequiredService<IAppLanguage>().Current;
+                return Task.FromResult<ProviderCultureResult?>(new ProviderCultureResult(AppLanguages.CultureName(language)));
+            }));
+        });
 
         // First-run setup exists only while it is allowed (plan 7.1); otherwise it is a plain 404, also for GET.
         app.Use(async (ctx, next) =>

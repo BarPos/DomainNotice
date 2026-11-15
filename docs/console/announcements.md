@@ -23,6 +23,9 @@ nav_order: 1
 | **Schedule** | Start and end (entered in your browser's time zone, stored in UTC), times shown per user, repeat interval, unlock rule and minimum seconds |
 | **Summary** | Validation, then save |
 
+The live preview of the window on the PCs is shown beside **Basic**, **Content**, **Buttons and questions** and
+**Summary**.
+
 ### Name and title
 
 An announcement has two titles:
@@ -100,7 +103,8 @@ Each announcement has these tabs:
 
 ### Anonymous answers
 
-For an announcement with anonymous answers:
+For an announcement with anonymous answers, the window's footer tells the user that their answers are anonymous (also
+in the preview). Then:
 - the **confirmation** is stored as usual (user, computer, time), so you still know who responded;
 - the **answers** are stored with **no time and no link** to the confirmation, delivery, user or computer. They use a
   random key, and are written in shuffled batches every `AnonymousAnswers:FlushMinutes` in a separate database

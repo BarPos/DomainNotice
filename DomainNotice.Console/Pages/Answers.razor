@@ -1,20 +1,19 @@
 @page "/answers"
 @inject NavigationManager Nav
 
-<PageTitle>Answers · DomainNotice</PageTitle>
+<PageTitle>@T["Answers"] · DomainNotice</PageTitle>
 
 <div class="dn-page-title">
-    <MudText Typo="Typo.h5">Answers</MudText>
+    <MudText Typo="Typo.h5">@T["Answers"]</MudText>
 </div>
 
 <MudTabs Outlined="true" Rounded="true" ActivePanelIndex="Tab" ActivePanelIndexChanged="TabChanged" KeepPanelsAlive="false" TabPanelsClass="pa-4">
-    <MudTabPanel Text="Named answers" Icon="@Icons.Material.Filled.Person">
+    <MudTabPanel Text="@T["Named answers"]" Icon="@Icons.Material.Filled.Person">
         <DataGrid TRow="NamedAnswerRow" List="ConsoleLists.NamedAnswers" Prefix="n." Cells="_named" />
     </MudTabPanel>
-    <MudTabPanel Text="Anonymous answers" Icon="@Icons.Material.Filled.VisibilityOff">
+    <MudTabPanel Text="@T["Anonymous answers"]" Icon="@Icons.Material.Filled.VisibilityOff">
         <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
-            Anonymous answers have no user, computer or time. They can only be filtered by announcement, question and option,
-            and are listed by content, never in the order they were stored.
+            @T["Anonymous answers have no user, computer or time. They can only be filtered by announcement, question and option, and are listed by content, never in the order they were stored."]
         </MudAlert>
         <DataGrid TRow="AnonymousAnswerRow" List="ConsoleLists.AnonymousAnswers" Prefix="a." Cells="_anonymous" />
     </MudTabPanel>

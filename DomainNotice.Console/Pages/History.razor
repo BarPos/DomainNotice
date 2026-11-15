@@ -3,28 +3,33 @@
 @inject IOptions<DomainNotice.Server.Options.HistoryOptions> HistoryOptions
 @using Microsoft.Extensions.Options
 
-<PageTitle>History · DomainNotice</PageTitle>
+<PageTitle>@T["History"] · DomainNotice</PageTitle>
 
 <div class="dn-page-title">
-    <MudText Typo="Typo.h5">History</MudText>
-    <MudText Typo="Typo.body2">Kept for @HistoryOptions.Value.RetentionDays days after a row is closed; open rows are never pruned.</MudText>
+    <MudText Typo="Typo.h5">@T["History"]</MudText>
+    <MudText Typo="Typo.body2">@T.F("Kept for {0} days after a row is closed; open rows are never pruned.", HistoryOptions.Value.RetentionDays)</MudText>
 </div>
 
 <MudTabs Outlined="true" Rounded="true" ActivePanelIndex="Tab" ActivePanelIndexChanged="TabChanged" KeepPanelsAlive="false" TabPanelsClass="pa-4">
-    <MudTabPanel Text="Name history">
+    <MudTabPanel Text="@T["Name history"]">
         <DataGrid TRow="NameHistoryRow" List="ConsoleLists.NameHistory" Prefix="n." RowHref="@(r => $"/computers/{r.ComputerId}?tab=1")" />
     </MudTabPanel>
-    <MudTabPanel Text="User history">
+    <MudTabPanel Text="@T["User history"]">
         <DataGrid TRow="UserHistoryRow" List="ConsoleLists.UserHistory" Prefix="u." RowHref="@(r => $"/computers/{r.ComputerId}?tab=2")" />
     </MudTabPanel>
-    <MudTabPanel Text="IP history">
-        <DataGrid TRow="IpHistoryRow" List="ConsoleLists.IpHistory" Prefix="i." RowHref="@(r => $"/computers/{r.ComputerId}?tab=3")" />
+    <MudTabPanel Text="@T["IP history"]">
+        <DataGrid TRow="IpHistoryRow" List="ConsoleLists.IpHistory" Prefix="i." RowHref="@(r => $"/computers/{r.ComputerId}?tab=3")" Cells="_ipCells" />
     </MudTabPanel>
 </MudTabs>
 
 @code {
     [SupplyParameterFromQuery(Name = "tab")] public int? TabParam { get; set; }
     private int Tab => Math.Clamp(TabParam ?? 0, 0, 2);
+
+    private Dictionary<string, RenderFragment<IpHistoryRow>> _ipCells => new()
+    {
+        ["kind"] = r => @<span>@T[r.Kind.ToString()]</span>,
+    };
 
     // MudTabs can raise this while panels register during prerendering; navigating then throws mid-stream.
     private void TabChanged(int index)

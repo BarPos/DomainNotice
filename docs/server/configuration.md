@@ -85,7 +85,7 @@ request, so signing in over plain HTTP works. See [Console over HTTP](installati
 | `UpdateTimeoutMinutes` | `30` | An agent update not finished in this time is marked Failed |
 | `MaxParallelUpdates` | `50` | Package transfers at once |
 | `UpdateBandwidthMbps` | `0` | Total bandwidth cap for package transfers (0 = none) |
-| `AutoUpdate` | `false` | After a server update, send the update command to outdated agents automatically |
+| `AutoUpdate` | `false` | Update outdated agents automatically when they are online. **Settings → Agent install** overrides it. |
 
 ## Enrolment
 
@@ -158,3 +158,6 @@ sudo systemctl edit domainnotice
 | What computers awaiting approval receive (**Settings → Enrolment**): *Everyone and User announcements* (default) or *Nothing* | — |
 | Bind password (**Directory**), when `BindPasswordSource` is `Database` | — |
 | Local accounts (**Settings → Local accounts**) | — |
+| Language of the Console and agents (**Settings → General**): English or Polish | — |
+| Update agents automatically (**Settings → Agent install**) | `Agents:AutoUpdate` |
+| Text to the right of the title in the announcement window (**Settings → Announcement window**) | — |

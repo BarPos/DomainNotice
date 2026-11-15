@@ -241,7 +241,7 @@ internal sealed class DeliveryCoordinator : IAgentLifecycleObserver
         {
             DeliveryId = deliveryId,
             SessionUser = userName,
-            Announcement = ToPayload(announcement, await HeaderTextAsync(ct)),
+            Announcement = ToPayload(announcement, await HeaderTextAsync(ct), _services.GetService<IAppLanguage>()?.Current),
         }, ct);
         if (!sent)
             _logger.LogInformation("Show {DeliveryId} not sent (computer {ComputerId} offline); it is re-sent on reconnect", deliveryId, computerId);
@@ -254,11 +254,12 @@ internal sealed class DeliveryCoordinator : IAgentLifecycleObserver
         return window is null ? null : await window.GetHeaderTextAsync(ct);
     }
 
-    public static AnnouncementPayload ToPayload(Announcement a, string? headerText = null) => new()
+    public static AnnouncementPayload ToPayload(Announcement a, string? headerText = null, string? language = null) => new()
     {
         Id = a.Id,
         Title = a.DisplayTitle,
         HeaderText = headerText,
+        Language = language,
         BodyMarkdown = a.BodyMarkdown,
         MinDismissSeconds = a.MinDismissSeconds,
         UnlockMode = a.UnlockMode,

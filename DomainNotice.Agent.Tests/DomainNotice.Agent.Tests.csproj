@@ -20,6 +20,7 @@
     </ItemGroup>
     <ItemGroup>
         <Compile Include="..\DomainNotice.Agent\Logic\*.cs" Link="Logic\%(Filename)%(Extension)" />
+        <Compile Include="..\DomainNotice.Agent.Session\AgentTexts.cs" Link="Session\AgentTexts.cs" />
     </ItemGroup>
     <ItemGroup>
         <Using Include="Xunit" />

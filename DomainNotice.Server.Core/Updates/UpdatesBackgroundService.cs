@@ -14,7 +14,8 @@ namespace DomainNotice.Server.Updates;
 /// <item>finish the ServerUpdateRun from the result file update.sh left;</item>
 /// <item>fetch the agent MSI for the server's own version if it is missing (only when updates are configured);</item>
 /// <item>check for releases every <c>Updates:CheckIntervalHours</c> (only when configured);</item>
-/// <item>P11: with <c>Agents:AutoUpdate</c>, request updates for outdated agents once per server version.</item>
+/// <item>P11: with automatic updates on (Settings, or <c>Agents:AutoUpdate</c>), request updates for outdated agents
+/// once per server version. Agents that come online later are handled when they connect.</item>
 /// </list>
 /// </summary>
 internal sealed class UpdatesBackgroundService(
@@ -24,7 +25,6 @@ internal sealed class UpdatesBackgroundService(
     IReleaseSource releases,
     ISettingsStore settings,
     IOptions<UpdatesOptions> updatesOptions,
-    IOptions<AgentsOptions> agentsOptions,
     TimeProvider time,
     ILogger<UpdatesBackgroundService> logger) : BackgroundService
 {
@@ -68,7 +68,7 @@ internal sealed class UpdatesBackgroundService(
     /// <summary>P11: once per server version, after the package for that version is cached.</summary>
     internal async Task AutoUpdateAgentsAsync(CancellationToken ct)
     {
-        if (!agentsOptions.Value.AutoUpdate) return;
+        if (!await agentUpdates.GetAutoUpdateAsync(ct)) return;
         var done = await settings.GetAsync(UpdateSettingKeys.AutoUpdateDoneForVersion, ct);
         if (done == AppVersion.Current) return;
         if (await packages.GetCurrentAsync(ct) is null) return; // retried on the next tick (e.g. after an import)

@@ -7,12 +7,12 @@
 *@
 
 <div class="@($"dn-filter {(Dirty ? "dn-filter-dirty" : "")} {(Applied is null ? "dn-filter-draft" : "")}")">
-    <span class="dn-filter-label">@Field.Label</span>
+    <span class="dn-filter-label">@T[Field.Label]</span>
 
     @if (Field.Ops.Count > 1)
     {
         <MudSelect T="FilterOp" Value="_op" ValueChanged="OpChangedAsync" Dense="true" Variant="Variant.Text" Margin="Margin.Dense"
-                   Class="dn-filter-op" aria-label="@($"{Field.Label} condition")">
+                   Class="dn-filter-op" aria-label="@T.F("{0} condition", T[Field.Label])">
             @foreach (var op in Field.Ops)
             {
                 <MudSelectItem Value="@op">@OpLabel(op)</MudSelectItem>
@@ -24,55 +24,55 @@
     {
         case FieldKind.Text:
             <MudTextField @ref="_textField" T="string" @bind-Value="_text" Immediate="true" Variant="Variant.Text" Margin="Margin.Dense"
-                          Placeholder="type, then Enter" AutoFocus="AutoFocus" Class="dn-filter-input" OnKeyDown="KeyDownAsync"
+                          Placeholder="@T["type, then Enter"]" AutoFocus="AutoFocus" Class="dn-filter-input" OnKeyDown="KeyDownAsync"
                           Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.KeyboardReturn" OnAdornmentClick="ApplyAsync"
-                          AdornmentAriaLabel="Apply filter" aria-label="@Field.Label" />
+                          AdornmentAriaLabel="@T["Apply filter"]" aria-label="@T[Field.Label]" />
             break;
 
         case FieldKind.Number:
             <MudNumericField @ref="_numberField" T="double?" @bind-Value="_number" Immediate="true" Variant="Variant.Text" Margin="Margin.Dense"
-                             Placeholder="number, then Enter" AutoFocus="AutoFocus" Class="dn-filter-input dn-filter-narrow" OnKeyDown="KeyDownAsync"
-                             HideSpinButtons="true" aria-label="@Field.Label" />
+                             Placeholder="@T["number, then Enter"]" AutoFocus="AutoFocus" Class="dn-filter-input dn-filter-narrow" OnKeyDown="KeyDownAsync"
+                             HideSpinButtons="true" aria-label="@T[Field.Label]" />
             break;
 
         case FieldKind.Choice:
             <MudSelect @ref="_choiceSelect" T="string" MultiSelection="true" SelectedValues="_choices" SelectedValuesChanged="ChoicesChangedAsync"
-                       Dense="true" Variant="Variant.Text" Margin="Margin.Dense" Placeholder="any" Class="dn-filter-input"
-                       ToStringFunc="@(v => Field.Options.FirstOrDefault(o => o.Value == v)?.Label ?? v)" aria-label="@Field.Label">
+                       Dense="true" Variant="Variant.Text" Margin="Margin.Dense" Placeholder="@T["any"]" Class="dn-filter-input"
+                       ToStringFunc="@(v => Field.Options.FirstOrDefault(o => o.Value == v) is { } o ? T[o.Label] : v)" aria-label="@T[Field.Label]">
                 @foreach (var o in Field.Options)
                 {
-                    <MudSelectItem Value="@o.Value">@o.Label</MudSelectItem>
+                    <MudSelectItem Value="@o.Value">@T[o.Label]</MudSelectItem>
                 }
             </MudSelect>
             break;
 
         case FieldKind.Bool:
             <MudSelect @ref="_boolSelect" T="string" Value="_text" ValueChanged="BoolChangedAsync" Dense="true" Variant="Variant.Text"
-                       Margin="Margin.Dense" Placeholder="any" Class="dn-filter-input dn-filter-narrow" aria-label="@Field.Label">
+                       Margin="Margin.Dense" Placeholder="@T["any"]" Class="dn-filter-input dn-filter-narrow" aria-label="@T[Field.Label]">
                 @foreach (var o in Field.Options)
                 {
-                    <MudSelectItem Value="@o.Value">@o.Label</MudSelectItem>
+                    <MudSelectItem Value="@o.Value">@T[o.Label]</MudSelectItem>
                 }
             </MudSelect>
             break;
 
         case FieldKind.Date when _op is FilterOp.OlderThanDays or FilterOp.WithinDays:
             <MudNumericField @ref="_daysField" T="int?" @bind-Value="_days" Immediate="true" Min="0" Max="36500" Variant="Variant.Text"
-                             Margin="Margin.Dense" Placeholder="days, then Enter" AutoFocus="AutoFocus" Class="dn-filter-input dn-filter-narrow"
-                             OnKeyDown="KeyDownAsync" HideSpinButtons="true" aria-label="@($"{Field.Label} days")" />
-            <span class="dn-filter-unit">days</span>
+                             Margin="Margin.Dense" Placeholder="@T["days, then Enter"]" AutoFocus="AutoFocus" Class="dn-filter-input dn-filter-narrow"
+                             OnKeyDown="KeyDownAsync" HideSpinButtons="true" aria-label="@T.F("{0} days", T[Field.Label])" />
+            <span class="dn-filter-unit">@T["days"]</span>
             break;
 
         case FieldKind.Date:
-            <MudDatePicker Date="_from" DateChanged="FromChangedAsync" Placeholder="@($"from ({Clock.ZoneLabel})")" Variant="Variant.Text"
-                           Margin="Margin.Dense" Clearable="true" DateFormat="yyyy-MM-dd" Class="dn-filter-input dn-filter-date" aria-label="@($"{Field.Label} from")" />
-            <MudDatePicker Date="_to" DateChanged="ToChangedAsync" Placeholder="@($"to ({Clock.ZoneLabel})")" Variant="Variant.Text"
-                           Margin="Margin.Dense" Clearable="true" DateFormat="yyyy-MM-dd" Class="dn-filter-input dn-filter-date" aria-label="@($"{Field.Label} to")" />
+            <MudDatePicker Date="_from" DateChanged="FromChangedAsync" Placeholder="@T.F("from ({0})", Clock.ZoneLabel)" Variant="Variant.Text"
+                           Margin="Margin.Dense" Clearable="true" DateFormat="yyyy-MM-dd" Class="dn-filter-input dn-filter-date" aria-label="@T.F("{0} from", T[Field.Label])" />
+            <MudDatePicker Date="_to" DateChanged="ToChangedAsync" Placeholder="@T.F("to ({0})", Clock.ZoneLabel)" Variant="Variant.Text"
+                           Margin="Margin.Dense" Clearable="true" DateFormat="yyyy-MM-dd" Class="dn-filter-input dn-filter-date" aria-label="@T.F("{0} to", T[Field.Label])" />
             break;
     }
 
     <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="OnRemove" Class="dn-filter-remove"
-                   aria-label="@($"Remove the {Field.Label} filter")" />
+                   aria-label="@T.F("Remove the {0} filter", T[Field.Label])" />
 </div>
 
 @code {
@@ -238,15 +238,15 @@
         await ApplyAsync();
     }
 
-    public static string OpLabel(FilterOp op) => op switch
+    private string OpLabel(FilterOp op) => op switch
     {
-        FilterOp.Contains => "contains",
-        FilterOp.Equals => "is",
-        FilterOp.Between => "between",
-        FilterOp.OlderThanDays => "older than",
-        FilterOp.WithinDays => "within the last",
-        FilterOp.AtLeast => "at least",
-        FilterOp.AtMost => "at most",
+        FilterOp.Contains => T["contains"],
+        FilterOp.Equals => T["is"],
+        FilterOp.Between => T["between"],
+        FilterOp.OlderThanDays => T["older than"],
+        FilterOp.WithinDays => T["within the last"],
+        FilterOp.AtLeast => T["at least"],
+        FilterOp.AtMost => T["at most"],
         _ => op.ToString(),
     };
 }

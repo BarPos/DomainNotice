@@ -227,4 +227,11 @@ public interface IAgentUpdateService
     Task<(OperationResult Result, int Created)> RequestUpdateAsync(IReadOnlyCollection<Guid> computerIds, string actor, CancellationToken ct = default);
     Task<(OperationResult Result, int Created)> RequestUpdateAllOutdatedAsync(string actor, CancellationToken ct = default);
     Task<OperationResult> CancelAsync(Guid taskId, string actor, CancellationToken ct = default);
+    /// <summary>Settings → Agent install: update every outdated agent automatically when it is online. A Console value
+    /// overrides Agents:AutoUpdate.</summary>
+    Task<bool> GetAutoUpdateAsync(CancellationToken ct = default);
+    /// <summary>Turns automatic updates on/off; turning it on also requests updates for the outdated agents online now.</summary>
+    Task<OperationResult> SetAutoUpdateAsync(bool enabled, string actor, CancellationToken ct = default);
+    /// <summary>Called when an agent comes online: requests its update when automatic updates are on and it is outdated.</summary>
+    Task AutoUpdateOnlineAgentAsync(Guid computerId, string? agentVersion, CancellationToken ct = default);
 }

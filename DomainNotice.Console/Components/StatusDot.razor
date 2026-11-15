@@ -16,8 +16,8 @@
 
     private string Label => Status switch
     {
-        StatusKind.Online => "Online",
-        StatusKind.Revoked => "Revoked",
-        _ => "Offline",
+        StatusKind.Online => T["Online"],
+        StatusKind.Revoked => T["Revoked"],
+        _ => T["Offline"],
     };
 }

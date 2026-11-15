@@ -9,16 +9,16 @@
 @inject IDialogService Dialogs
 @inject BrowserClock Clock
 
-<PageTitle>Directory · DomainNotice</PageTitle>
+<PageTitle>@T["Directory"] · DomainNotice</PageTitle>
 
 <div class="dn-page-title">
-    <MudText Typo="Typo.h5">Directory</MudText>
+    <MudText Typo="Typo.h5">@T["Directory"]</MudText>
     <MudSpacer />
     <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Sync" Disabled="@(!DirectoryAdmin.IsConfigured || _busy)" OnClick="@(() => SyncAsync(false))">Sync now</MudButton>
-        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.SyncAlt" Disabled="@(!DirectoryAdmin.IsConfigured || _busy)" OnClick="@(() => SyncAsync(true))">Full sync</MudButton>
-        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.NetworkCheck" Disabled="@(!DirectoryAdmin.IsConfigured || _busy)" OnClick="TestAsync">Test connection</MudButton>
-        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Key" Disabled="@(!DirectoryAdmin.IsConfigured)" OnClick="SetPasswordAsync">Set bind password</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Sync" Disabled="@(!DirectoryAdmin.IsConfigured || _busy)" OnClick="@(() => SyncAsync(false))">@T["Sync now"]</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.SyncAlt" Disabled="@(!DirectoryAdmin.IsConfigured || _busy)" OnClick="@(() => SyncAsync(true))">@T["Full sync"]</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.NetworkCheck" Disabled="@(!DirectoryAdmin.IsConfigured || _busy)" OnClick="TestAsync">@T["Test connection"]</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Key" Disabled="@(!DirectoryAdmin.IsConfigured)" OnClick="SetPasswordAsync">@T["Set bind password"]</MudButton>
     </AuthorizeView>
 </div>
 
@@ -26,8 +26,7 @@
     @if (!DirectoryAdmin.IsConfigured)
     {
         <MudAlert Severity="Severity.Info" Dense="true">
-            No directory is configured (Directory:Hosts and Directory:BaseDn in the config file). Sign-in uses local accounts, and
-            announcements can target typed user and computer names only.
+            @T["No directory is configured (Directory:Hosts and Directory:BaseDn in the config file). Sign-in uses local accounts, and announcements can target typed user and computer names only."]
         </MudAlert>
     }
     else if (_status is null)
@@ -38,17 +37,17 @@
     {
         var o = DirectoryOptions.Value;
         <div class="d-flex flex-wrap gap-8">
-            <div><MudText Typo="Typo.caption">Domain controllers</MudText><MudText>@string.Join(", ", o.Hosts) (port @o.Port, @o.Security)</MudText></div>
-            <div><MudText Typo="Typo.caption">Base DN</MudText><MudText Class="dn-mono">@o.BaseDn</MudText></div>
-            <div><MudText Typo="Typo.caption">Bind password from</MudText><MudText>@o.BindPasswordSource</MudText></div>
-            <div><MudText Typo="Typo.caption">Last successful sync</MudText><MudText>@(_status.LastSuccessUtc is null ? "Never" : Clock.Format(_status.LastSuccessUtc))</MudText></div>
-            <div><MudText Typo="Typo.caption">Last attempt</MudText><MudText>@Clock.Format(_status.LastAttemptUtc)</MudText></div>
-            <div><MudText Typo="Typo.caption">Objects</MudText><MudText>@_status.ObjectCount</MudText></div>
-            <div><MudText Typo="Typo.caption">State</MudText><MudText>@(_status.Running ? "Sync running…" : "Idle")</MudText></div>
+            <div><MudText Typo="Typo.caption">@T["Domain controllers"]</MudText><MudText>@T.F("{0} (port {1}, {2})", string.Join(", ", o.Hosts), o.Port, o.Security)</MudText></div>
+            <div><MudText Typo="Typo.caption">@T["Base DN"]</MudText><MudText Class="dn-mono">@o.BaseDn</MudText></div>
+            <div><MudText Typo="Typo.caption">@T["Bind password from"]</MudText><MudText>@o.BindPasswordSource</MudText></div>
+            <div><MudText Typo="Typo.caption">@T["Last successful sync"]</MudText><MudText>@(_status.LastSuccessUtc is null ? T["Never"] : Clock.Format(_status.LastSuccessUtc))</MudText></div>
+            <div><MudText Typo="Typo.caption">@T["Last attempt"]</MudText><MudText>@Clock.Format(_status.LastAttemptUtc)</MudText></div>
+            <div><MudText Typo="Typo.caption">@T["Objects"]</MudText><MudText>@_status.ObjectCount</MudText></div>
+            <div><MudText Typo="Typo.caption">@T["State"]</MudText><MudText>@(_status.Running ? T["Sync running…"] : T["Idle"])</MudText></div>
         </div>
         @if (_status.LastError is not null)
         {
-            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">Last error: @_status.LastError</MudAlert>
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">@T.F("Last error: {0}", T.Maybe(_status.LastError))</MudAlert>
         }
     }
 </MudPaper>
@@ -57,7 +56,7 @@
     <MudPaper Outlined="true" Class="dn-tree pa-2">
         @if (_ous.Count == 0)
         {
-            <MudText Typo="Typo.body2" Class="pa-2">Nothing synced yet.</MudText>
+            <MudText Typo="Typo.body2" Class="pa-2">@T["Nothing synced yet."]</MudText>
         }
         <MudTreeView T="string" SelectedValue="@(Parent ?? "")" SelectedValueChanged="ParentChanged" SelectionMode="SelectionMode.SingleSelection" Dense="true" Hover="true">
             @OuNodes(null)
@@ -115,11 +114,12 @@
 
     private Dictionary<string, RenderFragment<DirectoryObjectRow>> _cells => new()
     {
+        ["kind"] = r => @<span>@T[GridField.Humanize(r.Kind.ToString())]</span>,
         ["agent"] = r => @<span>
             @if (r.Kind == DirectoryObjectKind.Computer)
             {
-                @if (r.EnrolledComputerId is { } id) { <MudLink Href="@($"/computers/{id}")">Enrolled</MudLink> }
-                else { <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">No agent</MudChip> }
+                @if (r.EnrolledComputerId is { } id) { <MudLink Href="@($"/computers/{id}")">@T["Enrolled"]</MudLink> }
+                else { <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">@T["No agent"]</MudChip> }
             }
         </span>,
     };
@@ -131,7 +131,7 @@
         try
         {
             await DirectoryAdmin.RequestSyncAsync(full, actor);
-            Snackbar.Add(full ? "Full sync requested." : "Incremental sync requested.", Severity.Info);
+            Snackbar.Add(full ? T["Full sync requested."] : T["Incremental sync requested."], Severity.Info);
             await LoadAsync();
         }
         finally
@@ -147,7 +147,7 @@
         try
         {
             var result = await DirectoryAdmin.TestConnectionAsync();
-            Snackbar.Add(result.Ok ? "The service account could bind to the directory." : $"Connection failed: {result.Error}",
+            Snackbar.Add(result.Ok ? T["The service account could bind to the directory."] : T.F("Connection failed: {0}", T.Maybe(result.Error)),
                 result.Ok ? Severity.Success : Severity.Error);
         }
         finally
@@ -160,12 +160,12 @@
     {
         if (await Me.RequireAdminAsync() is not { } actor) return;
         var note = DirectoryOptions.Value.BindPasswordSource == "Database"
-            ? "It is stored encrypted in the database."
-            : $"Note: Directory:BindPasswordSource is \"{DirectoryOptions.Value.BindPasswordSource}\"; set it to \"Database\" for this password to be used.";
-        var password = await PromptDialog.AskAsync(Dialogs, "Set bind password", "Bind password", "Save", secret: true, confirm: true,
-            message: $"Password of the bind account {DirectoryOptions.Value.BindUser}. {note}");
+            ? T["It is stored encrypted in the database."]
+            : T.F("Note: Directory:BindPasswordSource is \"{0}\"; set it to \"Database\" for this password to be used.", DirectoryOptions.Value.BindPasswordSource);
+        var password = await PromptDialog.AskAsync(Dialogs, T["Set bind password"], T["Bind password"], T["Save"], secret: true, confirm: true,
+            message: T.F("Password of the bind account {0}. {1}", DirectoryOptions.Value.BindUser, note));
         if (password is null) return;
         var result = await DirectoryAdmin.SetBindPasswordAsync(password, actor);
-        Snackbar.Add(result.Ok ? "Bind password saved." : result.Error ?? "Failed.", result.Ok ? Severity.Success : Severity.Error);
+        Snackbar.Add(result.Ok ? T["Bind password saved."] : T.Maybe(result.Error) ?? T["Failed."], result.Ok ? Severity.Success : Severity.Error);
     }
 }

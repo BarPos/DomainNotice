@@ -75,6 +75,8 @@ public sealed record ConnectionStatus : ILocalMessage
     public string ServerName { get; init; } = "";
     /// <summary>Optional human-readable detail, e.g. "The server is older than this agent".</summary>
     public string? Message { get; init; }
+    /// <summary>Language of the tray and windows ("en", "pl"), set in the Console.</summary>
+    public string? Language { get; init; }
 }
 
 /// <summary>Answer to a <see cref="ConfirmRequest"/>. On rejection the window stays open.</summary>

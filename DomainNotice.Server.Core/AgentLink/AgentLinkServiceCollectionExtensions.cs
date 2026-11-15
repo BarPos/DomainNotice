@@ -40,6 +40,8 @@ public static class AgentLinkServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<OfflineSweeper>());
         services.AddHostedService(sp => sp.GetRequiredService<AdLinkJob>());
         services.AddHostedService(sp => sp.GetRequiredService<HistoryRetention>());
+        services.AddSingleton<AgentConfigPusher>();
+        services.AddSingleton<IAgentLifecycleObserver>(sp => sp.GetRequiredService<AgentConfigPusher>());
         return services;
     }
 }

@@ -49,7 +49,9 @@ internal sealed class AnnouncementWindow : Window
         _sendConfirm = sendConfirm;
         _reportShown = reportShown;
 
-        Title = string.IsNullOrWhiteSpace(_announcement.Title) ? (_announcement.HeaderText is { Length: > 0 } h ? h : "Announcement") : _announcement.Title;
+        // The server sends the language with the announcement (1.0.4+); otherwise the tray's language applies.
+        if (_announcement.Language is { Length: > 0 } language) AgentTexts.SetLanguage(language);
+        Title = string.IsNullOrWhiteSpace(_announcement.Title) ? (_announcement.HeaderText is { Length: > 0 } h ? h : AgentTexts.Get("Announcement")) : _announcement.Title;
         FontFamily = NoticeTheme.Font;
         Foreground = NoticeTheme.Text;
         Icon = NoticeIcon.WindowIcon();
@@ -177,7 +179,20 @@ internal sealed class AnnouncementWindow : Window
         var footerRow = new DockPanel { LastChildFill = true };
         DockPanel.SetDock(buttonPanel, Dock.Right);
         footerRow.Children.Add(buttonPanel);
-        footerRow.Children.Add(_countdown);
+        var footerLeft = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        footerLeft.Children.Add(_countdown);
+        if (_announcement.AnonymousAnswers)
+        {
+            footerLeft.Children.Add(new TextBlock
+            {
+                Text = AgentTexts.Get("Your answers in this announcement are anonymous."),
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 13,
+                Foreground = NoticeTheme.MutedText,
+                Margin = new Thickness(0, 2, 12, 0),
+            });
+        }
+        footerRow.Children.Add(footerLeft);
         var footerStack = new StackPanel();
         footerStack.Children.Add(_error);
         footerStack.Children.Add(footerRow);
@@ -300,13 +315,13 @@ internal sealed class AnnouncementWindow : Window
 
         var remaining = DismissRules.SecondsRemaining(_announcement.UnlockMode, _announcement.MinDismissSeconds, elapsed);
         if (_submitting)
-            _countdown.Text = "Sending your answer…";
+            _countdown.Text = AgentTexts.Get("Sending your answer…");
         else if (remaining > 0)
-            _countdown.Text = $"You can continue in {remaining}s.";
+            _countdown.Text = AgentTexts.F("You can continue in {0}s.", remaining);
         else if (!ready)
-            _countdown.Text = "Select each required choice to continue.";
+            _countdown.Text = AgentTexts.Get("Select each required choice to continue.");
         else
-            _countdown.Text = "You can continue.";
+            _countdown.Text = AgentTexts.Get("You can continue.");
     }
 
     private async Task SubmitAsync(Guid buttonId)
@@ -323,7 +338,7 @@ internal sealed class AnnouncementWindow : Window
 
         var sent = await _sendConfirm(new ConfirmRequest { DeliveryId = DeliveryId, ButtonId = buttonId, Answers = answers });
         if (!sent)
-            OnConfirmResult(new ConfirmReply { DeliveryId = DeliveryId, Accepted = false, Error = "The DomainNotice Agent service is not reachable. Please try again in a moment." });
+            OnConfirmResult(new ConfirmReply { DeliveryId = DeliveryId, Accepted = false, Error = AgentTexts.Get("The DomainNotice Agent service is not reachable. Please try again in a moment.") });
     }
 
     /// <summary>The service answered: close on acceptance, otherwise stay open and show why.</summary>
@@ -336,7 +351,7 @@ internal sealed class AnnouncementWindow : Window
         }
 
         _submitting = false;
-        ShowError(string.IsNullOrWhiteSpace(reply.Error) ? "Your answer was not accepted. Please try again." : reply.Error);
+        ShowError(string.IsNullOrWhiteSpace(reply.Error) ? AgentTexts.Get("Your answer was not accepted. Please try again.") : AgentTexts.Get(reply.Error));
         Refresh();
     }
 
@@ -352,7 +367,7 @@ internal sealed class AnnouncementWindow : Window
     public void OnServiceLost()
     {
         if (!_submitting) return;
-        OnConfirmResult(new ConfirmReply { DeliveryId = DeliveryId, Accepted = false, Error = "The connection to the DomainNotice Agent service was lost. Please try again." });
+        OnConfirmResult(new ConfirmReply { DeliveryId = DeliveryId, Accepted = false, Error = AgentTexts.Get("The connection to the DomainNotice Agent service was lost. Please try again.") });
     }
 
     public void BringToFront()

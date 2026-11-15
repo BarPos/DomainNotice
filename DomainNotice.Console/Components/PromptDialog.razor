@@ -6,11 +6,14 @@
         {
             <MudText Typo="Typo.body2" Class="mb-3">@Message</MudText>
         }
-        <MudTextField T="string" @bind-Value="_value" Label="@Label" InputType="@(Secret ? InputType.Password : InputType.Text)"
-                      Variant="Variant.Outlined" Immediate="true" AutoFocus="true" />
-        @if (Confirm)
+        @if (!ConfirmOnly)
         {
-            <MudTextField T="string" @bind-Value="_confirm" Label="@($"Repeat {Label.ToLowerInvariant()}")" Class="mt-3"
+            <MudTextField T="string" @bind-Value="_value" Label="@Label" InputType="@(Secret ? InputType.Password : InputType.Text)"
+                          Variant="Variant.Outlined" Immediate="true" AutoFocus="true" />
+        }
+        @if (Confirm && !ConfirmOnly)
+        {
+            <MudTextField T="string" @bind-Value="_confirm" Label="@T.F("Repeat {0}", Label.ToLower(System.Globalization.CultureInfo.CurrentCulture))" Class="mt-3"
                           InputType="@(Secret ? InputType.Password : InputType.Text)" Variant="Variant.Outlined" Immediate="true" />
         }
         @if (_error is not null)
@@ -19,7 +22,7 @@
         }
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton OnClick="@(() => Dialog.Cancel())">@T["Cancel"]</MudButton>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok">@OkText</MudButton>
     </DialogActions>
 </MudDialog>
@@ -33,6 +36,8 @@
     [Parameter] public bool Secret { get; set; }
     [Parameter] public bool Confirm { get; set; }
     [Parameter] public int MinLength { get; set; }
+    /// <summary>Only the message and the two buttons (a confirm box); OK closes with true.</summary>
+    [Parameter] public bool ConfirmOnly { get; set; }
 
     private string? _value;
     private string? _confirm;
@@ -40,14 +45,19 @@
 
     private void Ok()
     {
+        if (ConfirmOnly)
+        {
+            Dialog.Close(DialogResult.Ok(true));
+            return;
+        }
         if (string.IsNullOrEmpty(_value) || _value.Length < MinLength)
         {
-            _error = MinLength > 0 ? $"Enter at least {MinLength} characters." : "Enter a value.";
+            _error = MinLength > 0 ? T.F("Enter at least {0} characters.", MinLength) : T["Enter a value."];
             return;
         }
         if (Confirm && _value != _confirm)
         {
-            _error = "The values do not match.";
+            _error = T["The values do not match."];
             return;
         }
         Dialog.Close(DialogResult.Ok(_value));
@@ -68,6 +78,15 @@
     }
 
     /// <summary>A confirm box for destructive actions. True only when the user confirms.</summary>
-    public static async Task<bool> ConfirmAsync(IDialogService dialogs, string title, string message, string yesText) =>
-        await dialogs.ShowMessageBoxAsync(title, message, yesText: yesText, cancelText: "Cancel") == true;
+    public static async Task<bool> ConfirmAsync(IDialogService dialogs, string title, string message, string yesText)
+    {
+        // Our own dialog rather than ShowMessageBoxAsync, so its Cancel button is in the Console's language.
+        var parameters = new DialogParameters<PromptDialog>
+        {
+            { x => x.Title, title }, { x => x.Message, message }, { x => x.OkText, yesText }, { x => x.ConfirmOnly, true },
+        };
+        var dialog = await dialogs.ShowAsync<PromptDialog>(title, parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        return result is { Canceled: false, Data: true };
+    }
 }
