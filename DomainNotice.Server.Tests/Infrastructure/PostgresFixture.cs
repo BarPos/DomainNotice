@@ -24,7 +24,10 @@ public sealed class PostgresFixture : IAsyncLifetime
             _adminConnectionString = external;
             return;
         }
-        _container = new PostgreSqlBuilder("postgres:16").Build();
+        // Every test gets its own database (and Npgsql pool), so allow plenty of connections.
+        _container = new PostgreSqlBuilder("postgres:16")
+            .WithCommand("-c", "max_connections=1000", "-c", "fsync=off", "-c", "synchronous_commit=off")
+            .Build();
         await _container.StartAsync();
         _adminConnectionString = _container.GetConnectionString();
     }
@@ -44,7 +47,13 @@ public sealed class PostgresFixture : IAsyncLifetime
             await using var cmd = new NpgsqlCommand($"CREATE DATABASE \"{name}\"", conn);
             await cmd.ExecuteNonQueryAsync();
         }
-        var cs = new NpgsqlConnectionStringBuilder(_adminConnectionString) { Database = name }.ConnectionString;
+        var cs = new NpgsqlConnectionStringBuilder(_adminConnectionString)
+        {
+            Database = name,
+            MaxPoolSize = 20,
+            ConnectionIdleLifetime = 2,
+            ConnectionPruningInterval = 1,
+        }.ConnectionString;
         var db = new TestDatabase(cs);
         if (createSchema)
         {
