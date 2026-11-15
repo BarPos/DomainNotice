@@ -1,13 +1,51 @@
+# ---- .NET build output
 bin/
 obj/
 /packages/
-riderModule.iml
-/_ReSharper.Caches/
+*.nupkg
+TestResults/
+*.trx
+coverage*/
+*.coverage
+*.coveragexml
+
+# ---- IDEs and OS files
 .idea/
 .vs/
-.DS_Store
-artifacts/
+.vscode/
 *.user
-TestResults/
+*.suo
+riderModule.iml
+/_ReSharper.Caches/
+*.DotSettings.user
+.DS_Store
+Thumbs.db
+
+# ---- Release output (build/build-server.sh, build/build-agent-msi.ps1, testenv/msi/build-msi.sh)
+artifacts/
+*.msi
+*.wixobj
+*.wixpdb
+*.cab
+
+# ---- Local development data and secrets (never commit keys, certificates or passwords)
 .devdata/
+.env
+*.env.local
+*.pfx
+*.p12
+*.key
+appsettings.*.local.json
+secrets*.conf
+*.log
+
+# ---- Agent tooling
 .claude/
+
+# ---- GitHub Pages / Jekyll (docs/)
+docs/_site/
+docs/.jekyll-cache/
+docs/.jekyll-metadata
+docs/.sass-cache/
+docs/vendor/
+docs/Gemfile.lock

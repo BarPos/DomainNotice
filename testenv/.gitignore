@@ -1,0 +1,6 @@
+.env
+certs/
+connection.txt
+probe/bin/
+probe/obj/
+probe-*.pfx*

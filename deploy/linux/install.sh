@@ -10,8 +10,8 @@
 # Package source:
 #   --package FILE        a DomainNotice.Server-<version>-linux-<arch>.tar.gz from build/build-server.sh or a release
 #                         (checked against SHA256SUMS.txt next to it when present)
-#   --version X.Y.Z       download that release from GitHub (default: latest). Works only once GITHUB_REPOSITORY
-#                         below is set; while it is blank, only --package works.
+#   --version X.Y.Z       download that release from GitHub (default: latest), from GITHUB_REPOSITORY below.
+#                         Without --package and --version, the latest release is downloaded.
 # Database:
 #   --db=local|existing   local: install PostgreSQL here (role and database "domainnotice", localhost only)
 #   --db-host H --db-port P --db-name N --db-user U --db-sslmode disable|allow|prefer|require|verify-ca|verify-full
@@ -31,8 +31,9 @@
 # Keys: DB_PASSWORD (existing database), ADMIN_PASSWORD (first local account, at least 8 characters).
 set -Eeuo pipefail
 
-# Set to owner/name once the project is published on GitHub (plan 11.4). Blank = no network access to GitHub.
-GITHUB_REPOSITORY=""
+# GitHub repository whose releases (built by .github/workflows/release.yml) install.sh and the server's updater use.
+# Blank = no network access to GitHub (then only --package works).
+GITHUB_REPOSITORY="BarPos/DomainNotice"
 
 INSTALL_ROOT=/opt/domainnotice
 SERVICE_USER=domainnotice

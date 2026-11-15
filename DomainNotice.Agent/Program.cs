@@ -26,8 +26,12 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 
 builder.Services.AddWindowsService(options => options.ServiceName = AgentConstants.ServiceName);
 builder.Services.AddSingleton<SessionChangeEvents>();
+string? recoveryError = null;
 if (WindowsServiceHelpers.IsWindowsService())
+{
     builder.Services.AddSingleton<IHostLifetime, AgentServiceLifetime>();
+    recoveryError = ServiceRecovery.Ensure(AgentConstants.ServiceName);
+}
 
 builder.Services.Configure<HostOptions>(options =>
 {
@@ -72,6 +76,7 @@ var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 lifetime.ApplicationStarted.Register(() => events.LogInformation("DomainNotice Agent {Version} started.", AppVersion.Current));
 lifetime.ApplicationStopping.Register(() => events.LogInformation("DomainNotice Agent {Version} stopping.", AppVersion.Current));
 if (folderError is not null) events.LogError("{Error}", folderError);
+if (recoveryError is not null) events.LogWarning("Could not set the service recovery actions: {Error}", recoveryError);
 
 try
 {

@@ -37,6 +37,13 @@ if (!string.IsNullOrWhiteSpace(extraConfig))
 builder.Configuration.AddEnvironmentVariables("DOMAINNOTICE_");
 
 builder.Host.UseSystemd();
+// UseSystemd detects systemd by reading /proc/<ppid>/comm, which ProtectProc=invisible in domainnotice.service hides,
+// so the Type=notify unit would never see READY=1. When systemd hands us a notify socket, use its lifetime anyway.
+if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NOTIFY_SOCKET")) && !cliOnly)
+{
+    builder.Services.AddSingleton<Microsoft.Extensions.Hosting.Systemd.ISystemdNotifier, Microsoft.Extensions.Hosting.Systemd.SystemdNotifier>();
+    builder.Services.AddSingleton<IHostLifetime, Microsoft.Extensions.Hosting.Systemd.SystemdLifetime>();
+}
 
 var consoleOptions = builder.Configuration.GetSection(ConsoleOptions.Section).Get<ConsoleOptions>() ?? new ConsoleOptions();
 if (!cliOnly)

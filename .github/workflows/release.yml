@@ -1,117 +1,56 @@
-# P12: builds the release assets of plan 11.4 when a v<version> tag is pushed and publishes a GitHub release:
+# Release (run manually: Actions → release → Run workflow).
+# Runs the build workflow (tests, server + Console tarballs, agent MSI), then creates the tag v<version> on the
+# selected commit and publishes a GitHub release with the assets of plan 11.4:
 #   DomainNotice.Server-<version>-linux-x64.tar.gz, DomainNotice.Server-<version>-linux-arm64.tar.gz,
 #   install.sh, DomainNotice.Agent-<version>-x64.msi, SHA256SUMS.txt
+# install.sh (GITHUB_REPOSITORY) and the server's updater (Updates:GitHubRepository) download from these releases.
+# The version is the one in Directory.Build.props and AppVersion.cs: bump both and commit before releasing.
 # Releases are not signed yet (P10 deferred).
 name: release
 
 on:
-  push:
-    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Mark as prerelease (servers on Updates:Channel=stable ignore it)"
+        type: boolean
+        default: false
+      draft:
+        description: "Create as a draft (publish it by hand later)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
-  version:
-    name: Check tag against Directory.Build.props
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.v.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: v
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
-          [[ "$version" =~ ^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$ ]] || { echo "::error::tag $tag is not v<x.y.z>"; exit 1; }
-          props="$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' Directory.Build.props | head -n1)"
-          app="$(sed -n 's:.*const string Current = "\([^"]*\)".*:\1:p' DomainNotice.Shared/AppVersion.cs | head -n1)"
-          [[ "$props" == "$version" ]] || { echo "::error::tag $tag does not match Directory.Build.props ($props)"; exit 1; }
-          [[ "$app" == "$version" ]] || { echo "::error::tag $tag does not match AppVersion.Current ($app)"; exit 1; }
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-  test:
-    name: Tests
-    needs: version
+  preflight:
+    name: Tag must not exist
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-      - name: Shell checks
-        shell: bash
+      - shell: bash
         run: |
           set -euo pipefail
-          for f in build/build-server.sh deploy/linux/install.sh deploy/linux/update.sh deploy/linux/tests/update-functions-test.sh; do bash -n "$f"; done
-          # shellcheck has not been run on these scripts yet: report findings, but do not block the release.
-          if command -v shellcheck >/dev/null; then
-            shellcheck -x -S warning build/build-server.sh deploy/linux/*.sh deploy/linux/tests/*.sh ||
-              echo "::warning::shellcheck reported findings (non-blocking)"
+          version="$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' Directory.Build.props | head -n1)"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "::error::tag v$version already exists: bump <Version> in Directory.Build.props and AppVersion.Current first"
+            exit 1
           fi
-          deploy/linux/update.sh --self-test
-          deploy/linux/tests/update-functions-test.sh
-      - name: dotnet test (PostgreSQL 16 via Testcontainers)
-        run: dotnet test --project DomainNotice.Server.Tests
+          echo "Releasing $version from ${GITHUB_SHA}" >> "$GITHUB_STEP_SUMMARY"
 
-  server:
-    name: Server tarballs
-    needs: [ version, test ]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-      - name: build-server.sh
-        run: build/build-server.sh --arch x64 --arch arm64
-      - name: Check asset names
-        shell: bash
-        run: |
-          v='${{ needs.version.outputs.version }}'
-          test -f "artifacts/DomainNotice.Server-$v-linux-x64.tar.gz"
-          test -f "artifacts/DomainNotice.Server-$v-linux-arm64.tar.gz"
-          test -f artifacts/install.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: server
-          if-no-files-found: error
-          path: |
-            artifacts/DomainNotice.Server-*.tar.gz
-            artifacts/install.sh
-
-  agent:
-    name: Agent MSI
-    needs: [ version, test ]
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-      - name: build-agent-msi.ps1
-        shell: pwsh
-        run: ./build/build-agent-msi.ps1
-      - name: Check asset name
-        shell: pwsh
-        run: |
-          $msi = "artifacts/DomainNotice.Agent-${{ needs.version.outputs.version }}-x64.msi"
-          if (-not (Test-Path $msi)) { throw "build-agent-msi.ps1 did not produce $msi" }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: agent
-          if-no-files-found: error
-          path: artifacts/DomainNotice.Agent-*-x64.msi
+  build:
+    name: Build and test
+    needs: preflight
+    uses: ./.github/workflows/build.yml
 
   release:
     name: GitHub release
-    needs: [ version, server, agent ]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -125,7 +64,7 @@ jobs:
         working-directory: assets
         run: |
           set -euo pipefail
-          v='${{ needs.version.outputs.version }}'
+          v='${{ needs.build.outputs.version }}'
           files=("DomainNotice.Server-$v-linux-x64.tar.gz" "DomainNotice.Server-$v-linux-arm64.tar.gz" install.sh "DomainNotice.Agent-$v-x64.msi")
           for f in "${files[@]}"; do test -f "$f" || { echo "::error::missing asset $f"; exit 1; }; done
           sha256sum "${files[@]}" > SHA256SUMS.txt
@@ -138,7 +77,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          v='${{ needs.version.outputs.version }}'
-          gh release create "v$v" --verify-tag --title "DomainNotice $v" --generate-notes \
+          v='${{ needs.build.outputs.version }}'
+          flags=()
+          [[ "${{ inputs.prerelease }}" == "true" ]] && flags+=(--prerelease)
+          [[ "${{ inputs.draft }}" == "true" ]] && flags+=(--draft)
+          gh release create "v$v" --target "$GITHUB_SHA" --title "DomainNotice $v" --generate-notes "${flags[@]}" \
             "DomainNotice.Server-$v-linux-x64.tar.gz" "DomainNotice.Server-$v-linux-arm64.tar.gz" \
             install.sh "DomainNotice.Agent-$v-x64.msi" SHA256SUMS.txt

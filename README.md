@@ -1,49 +1,86 @@
 # DomainNotice
 
-Admins write announcements in a web Console; every domain PC shows them in a window that can't be dismissed until
-the user responds. Rewrite of OpenNotifier — the full design is in [`plan.md`](plan.md).
+[![build](https://github.com/BarPos/DomainNotice/actions/workflows/build.yml/badge.svg)](https://github.com/BarPos/DomainNotice/actions/workflows/build.yml)
+[![docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://barpos.github.io/DomainNotice/)
 
-## Projects
+Administrators write announcements in a web **Console**, and every Windows PC in the domain shows them in a window that
+stays on top and cannot be dismissed until the user responds. DomainNotice records who read what, which button they
+clicked and how they answered optional (single or multiple choice, optionally anonymous) questions.
 
-| Project | Role |
+**Documentation: <https://barpos.github.io/DomainNotice/>** (source in [`docs/`](docs/)).
+
+## Highlights
+
+- **Server + Console** on Ubuntu 24.04+:
+  - one self-contained systemd service with PostgreSQL;
+  - an installer that can set up PostgreSQL for you;
+  - a Console button for self-update with rollback.
+- **Windows agent:**
+  - a LocalSystem service with a per-session tray app and no Exit;
+  - deployed as an MSI; updates are pushed by the server.
+- **Agent link:** TLS over raw TCP with pinned keys on both sides, an optional install password, and identity by key.
+- **Active Directory over LDAP only:**
+  - directory sync, with targets by objectGUID: users, groups, computers, OUs, nested groups;
+  - domain sign-in, with local backup accounts;
+  - automatic AD linking of computers (Kerberos proof or name).
+- **Inventory:** current IPs, users, and name, user and IP history, with configurable retention.
+- **Results:**
+  - read confirmations and answers, with CSV export;
+  - anonymous answers unlinkable to users and times.
+
+## Quick start
+
+```sh
+# Server (Ubuntu 24.04+), from the latest release:
+curl -fsSLO https://github.com/BarPos/DomainNotice/releases/latest/download/install.sh
+sudo bash install.sh
+```
+
+```bat
+:: Agent (Windows, elevated), values from Console → Settings → Agent install:
+msiexec /i DomainNotice.Agent-<version>-x64.msi /qn SERVERHOST=<server> SERVERPORT=5150 SERVERFINGERPRINT=<hex> INSTALLPASSWORD=<pw>
+```
+
+The full walkthrough is in [Getting started](https://barpos.github.io/DomainNotice/getting-started.html).
+
+## Repository layout
+
+| Path | |
 |---|---|
-| `DomainNotice.Shared` | Agent-link protocol (framing, envelope, messages), `AppVersion`, `DismissRules`, key fingerprints, local IPC messages |
-| `DomainNotice.Server.Core` | All server logic: `AgentLink/`, `Announcements/`, `Directory/`, `Accounts/`, `Updates/`, data model |
-| `DomainNotice.Server` | Host process (Console over HTTPS, agent listener on TCP 5150, background jobs, CLI), EF migrations |
-| `DomainNotice.Console` | Blazor (interactive server) + MudBlazor management panel, hosted by the Server |
-| `DomainNotice.Agent` | Windows service (LocalSystem) — server link, keys, sessions, updates |
-| `DomainNotice.Agent.Session` | Per-session tray icon (no Exit) and announcement window |
-| `DomainNotice.Agent.Installer` | WiX 5 MSI (Windows only, not in the .sln) |
-| `DomainNotice.Server.Tests` | xUnit v3, PostgreSQL via Testcontainers |
-| `DomainNotice.Agent.Tests` | Platform-neutral agent logic (not in the .sln) |
-| `build/`, `deploy/linux/` | Server tarballs, agent MSI script; `install.sh`, `update.sh`, systemd units |
-
-`DomainNotice.Server.Core` is not in plan section 1: the Server must reference the Console to host it, so both share
-Core instead of the Console referencing the Server.
+| `DomainNotice.Shared` | Agent protocol, version rules, shared logic |
+| `DomainNotice.Server.Core` | Server logic: agent link, announcements, directory, accounts, updates, data model |
+| `DomainNotice.Server` | Host process, configuration, CLI, EF Core migrations |
+| `DomainNotice.Console` | Blazor + MudBlazor web Console |
+| `DomainNotice.Agent`, `DomainNotice.Agent.Session` | Windows service and per-session UI |
+| `DomainNotice.Agent.Installer` | WiX 5 MSI (built on Windows) |
+| `DomainNotice.Server.Tests`, `DomainNotice.Agent.Tests` | Tests |
+| `build/`, `deploy/linux/` | Packaging scripts; `install.sh`, `update.sh`, systemd units |
+| `testenv/` | Docker test environment: Samba AD DC + Ubuntu/systemd server, plus a fake agent (dev/test only) |
+| `docs/` | GitHub Pages documentation |
+| `plan.md` | Design document and decisions |
 
 ## Development
 
-Requires the .NET 10 SDK and Docker (Docker is for development and tests only — production installs never use it).
+Requires the .NET 10 SDK, plus Docker for the tests (PostgreSQL via Testcontainers; production never uses Docker).
 
 ```sh
-docker run -d --name dn-dev-pg -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:16
-cd DomainNotice.Server
-export ASPNETCORE_ENVIRONMENT=Development
-dotnet run -- --migrate-only
-echo 'a-long-password' | dotnet run -- --create-local-account admin
-dotnet run            # Console: https://localhost:5443, agents: tcp/5150
+dotnet build
+dotnet test                                     # server tests (Docker)
+dotnet test --project DomainNotice.Agent.Tests  # agent logic tests
+testenv/up.sh                                   # full test environment with a Samba AD domain
 ```
 
-Tests: `dotnet test` (server, needs Docker) and `dotnet test --project DomainNotice.Agent.Tests`.
+See [Development](https://barpos.github.io/DomainNotice/development.html) for running locally, migrations and the
+test environment.
 
-New migration after a model change:
-`dotnet ef migrations add <Name> --project DomainNotice.Server --output-dir Data/Migrations`
-(`MigrationTests` fails while the model has changes missing from the migrations).
+## Releases
 
-## Packages
+Releases are made by hand:
 
-- Server: `build/build-server.sh` → `artifacts/DomainNotice.Server-<version>-linux-{x64,arm64}.tar.gz` + `SHA256SUMS.txt`.
-- Agent (on Windows): `build/build-agent-msi.ps1` → `artifacts/DomainNotice.Agent-<version>-x64.msi`.
-- Install on Ubuntu 24.04+: `sudo ./install.sh --package DomainNotice.Server-<version>-linux-x64.tar.gz`.
+1. Bump `<Version>` in `Directory.Build.props` and `AppVersion.Current` in `DomainNotice.Shared/AppVersion.cs`, then
+   commit.
+2. Run **Actions → release → Run workflow**. It tests, builds the server tarballs (x64, arm64) and the agent MSI, then
+   publishes the `v<version>` release with `SHA256SUMS.txt`.
 
-Updates from GitHub stay off while `Updates:GitHubRepository` is blank (no network calls).
+`install.sh` and the server's updater download from these releases. Every push to `main` also runs the **build**
+workflow, which leaves the tarballs and the MSI as downloadable artifacts.

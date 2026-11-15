@@ -1,0 +1,57 @@
+# DEV/TEST ONLY. DomainNotice test environment: a Samba AD DC and an Ubuntu 24.04 server (systemd) on which
+# install.sh installs DomainNotice and PostgreSQL. Production never uses Docker. Start with ./up.sh.
+name: domainnotice-test
+
+networks:
+  corp:
+    ipam:
+      config:
+        - subnet: 10.250.50.0/24
+
+volumes:
+  dc-samba: {}
+
+services:
+  dc:
+    build: ./dc
+    image: domainnotice-test/dc:latest
+    container_name: dn-dc
+    hostname: dc
+    domainname: corp.test
+    privileged: true            # Samba AD needs extended attributes / ACLs on sysvol
+    environment:
+      ADMIN_PASSWORD: ${DC_ADMIN_PASSWORD:?}
+      USER_PASSWORD: ${USER_PASSWORD:?}
+      BIND_PASSWORD: ${BIND_PASSWORD:?}
+    volumes:
+      - dc-samba:/var/lib/samba
+    networks:
+      corp:
+        ipv4_address: 10.250.50.10
+        aliases: [dc.corp.test]
+    ports:
+      - "636:636"               # LDAPS, for inspecting the directory from the host (ldapsearch / Apache Directory Studio)
+
+  server:
+    build: ./server
+    image: domainnotice-test/server:latest
+    container_name: dn-server
+    hostname: server
+    domainname: corp.test
+    privileged: true            # systemd as PID 1
+    cgroup: host
+    tmpfs: [/run, /run/lock, /tmp]
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ../artifacts:/pkg:ro
+      - ./certs:/certs:ro
+    networks:
+      corp:
+        ipv4_address: 10.250.50.20
+        aliases: [server.corp.test]
+    ports:
+      - "8443:443"              # Console (HTTPS)
+      - "5150:5150"             # agent link (TLS over TCP)
+    depends_on: [dc]
+    # The whole install (/opt/domainnotice, PostgreSQL, systemd units, service user) lives in this container's own
+    # filesystem, as on a real server: ./down.sh + ./up.sh keep it; recreating the container means a clean install.
