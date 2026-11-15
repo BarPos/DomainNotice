@@ -10,7 +10,10 @@ using Microsoft.Extensions.Logging;
 namespace DomainNotice.Server.AgentLink;
 
 /// <summary>Result of applying a Hello or Status to the inventory.</summary>
-internal sealed record InventoryUpdate(bool NameChanged, bool SessionsChanged, SessionsChange Change);
+internal sealed record InventoryUpdate(bool NameChanged, bool SessionsChanged, SessionsChange Change, string? RefusedReason = null)
+{
+    public static InventoryUpdate Refused(string reason) => new(false, false, new SessionsChange([], [], []), reason);
+}
 
 /// <summary>
 /// Computer inventory and history (plan 6, P6): name, IPs, sessions and their history rows. Callers hold the
@@ -61,7 +64,11 @@ internal sealed class ComputerInventory(IDbContextFactory<AppDbContext> dbFactor
         var now = Now;
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         // Identity is the connection's computer id (from the key), never the reported name.
-        var computer = await db.Computers.SingleAsync(c => c.Id == conn.ComputerId, ct);
+        var computer = await db.Computers.FirstOrDefaultAsync(c => c.Id == conn.ComputerId, ct);
+        // Revoked, replaced or deleted after this connection was accepted.
+        if (computer is null) return InventoryUpdate.Refused(RefusedReasons.UnknownKey);
+        if (computer.IsRevoked) return InventoryUpdate.Refused(RefusedReasons.Revoked);
+        if (computer.IsReplaced) return InventoryUpdate.Refused(RefusedReasons.Replaced);
 
         var nameChanged = ApplyName(db, computer, Clip(reportedName, 255), now, await db.ComputerNameHistory
             .Where(h => h.ComputerId == computer.Id && h.IsCurrent).ToListAsync(ct));

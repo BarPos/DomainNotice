@@ -37,10 +37,16 @@ internal sealed class AgentHub(ILogger<AgentHub> logger) : IAgentHub
         }
     }
 
+    /// <summary>
+    /// Takes the per-computer lock, so a Hello that is being accepted at the same time either sees the new
+    /// database state (revoked/replaced) or is registered before this runs and gets closed here.
+    /// </summary>
     public async Task DisconnectAsync(Guid computerId, string refusedReason, string? message = null)
     {
-        if (_online.TryGetValue(computerId, out var conn))
-            await conn.CloseAsync(refusedReason, message).ConfigureAwait(false);
+        AgentConnection? conn;
+        using (await LockAsync(computerId, CancellationToken.None).ConfigureAwait(false))
+            _online.TryGetValue(computerId, out conn);
+        if (conn is not null) await conn.CloseAsync(refusedReason, message).ConfigureAwait(false);
     }
 
     /// <summary>Serialises inventory writes for one computer.</summary>

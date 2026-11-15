@@ -154,7 +154,7 @@ internal sealed class AdLinkService(
 
             // Newcomers waiting on a record that was just replaced now wait on this one.
             var waiting = await db.Computers
-                .Where(c => c.AdLinkState == AdLinkState.AwaitingApproval && c.ConflictsWithComputerId != null
+                .Where(c => c.Id != computerId && c.AdLinkState == AdLinkState.AwaitingApproval && c.ConflictsWithComputerId != null
                             && replaced.Contains(c.ConflictsWithComputerId.Value))
                 .ToListAsync(ct);
             foreach (var w in waiting) w.ConflictsWithComputerId = computerId;

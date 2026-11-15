@@ -43,6 +43,26 @@ public class ComputerAdminTests(PostgresFixture pg)
     }
 
     [Fact]
+    public async Task Revoke_between_connect_and_hello_refuses_the_hello()
+    {
+        var db = await pg.CreateDatabaseAsync();
+        await using var server = await AgentLinkTestHelpers.StartAsync(db);
+        var cert = TestAgentClient.CreateCertificate();
+        Guid id;
+        await using (var first = await server.ConnectAsync(cert))
+            id = (await first.EnrollAsync()).ComputerId!.Value;
+
+        await using var agent = await server.ConnectAsync(cert); // accepted as a known key, Hello not sent yet
+        await agent.PingAsync();
+        Assert.True((await server.Get<IComputerAdminService>().RevokeAsync(id, "admin", Ct)).Ok);
+        await agent.SendAsync(TestAgentClient.CreateHello(), ct: Ct);
+
+        Assert.Equal(RefusedReasons.Revoked, (await agent.WaitForRefusedAsync())?.Reason);
+        Assert.False(server.Get<IAgentHub>().IsOnline(id));
+        Assert.False((await AgentLinkTestHelpers.GetComputerAsync(db, id)).Online);
+    }
+
+    [Fact]
     public async Task Delete_disconnects_and_frees_the_key()
     {
         var db = await pg.CreateDatabaseAsync();

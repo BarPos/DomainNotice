@@ -79,20 +79,8 @@ internal sealed class KerberosProofValidator(
     /// <summary>The checks themselves, without configuration lookups (unit-testable).</summary>
     internal KerberosProofResult Validate(ReadOnlyMemory<byte> token, IReadOnlyList<KerberosKey> keys, string realm, string spn, byte[] channelBinding)
     {
-        KrbApReq apReq;
-        try
-        {
-            apReq = MessageParser.ParseContext(token) switch
-            {
-                KerberosContextToken k when k.KrbApReq is not null => k.KrbApReq,
-                _ => throw new FormatException("Not a Kerberos AP-REQ context token."),
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Kerberos token could not be parsed");
-            return KerberosProofResult.Fail("The token is not a Kerberos AP-REQ.");
-        }
+        var apReq = ParseApReq(token);
+        if (apReq?.Ticket is null || apReq.Authenticator is null) return KerberosProofResult.Fail("The token is not a Kerberos AP-REQ.");
 
         var ticketSName = apReq.Ticket?.SName;
         if (ticketSName is null || !SpnMatches(ticketSName, spn))
@@ -165,6 +153,31 @@ internal sealed class KerberosProofValidator(
         return new KerberosProofResult(true, parts[0].ToLowerInvariant(), decrypted.Ticket.CRealm.ToUpperInvariant());
     }
 
+    /// <summary>
+    /// Accepts the raw GSS-API krb5 initial context token (Package "Kerberos") and, for robustness, the SPNEGO
+    /// NegTokenInit form (Package "Negotiate") whose mechToken is a krb5 token. NTLM is never accepted.
+    /// </summary>
+    internal KrbApReq? ParseApReq(ReadOnlyMemory<byte> token)
+    {
+        try
+        {
+            switch (MessageParser.ParseContext(token))
+            {
+                case KerberosContextToken k:
+                    return k.KrbApReq;
+                case NegotiateContextToken n when n.Token?.InitialToken?.MechToken is { } inner:
+                    return MessageParser.ParseContext(inner) is KerberosContextToken k2 ? k2.KrbApReq : null;
+                default:
+                    return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Kerberos token could not be parsed");
+            return null;
+        }
+    }
+
     private void PruneReplay(DateTime now)
     {
         var cutoff = now - timings.KerberosSkew - timings.KerberosSkew;
@@ -206,8 +219,10 @@ internal sealed class KerberosProofValidator(
     }
 
     /// <summary>
-    /// Keys of the bind account: RC4 (NT hash) and AES128/AES256 with the AD user salt REALM + sAMAccountName
-    /// (one AES pair per candidate account name). The AD salt convention is not verified against a real domain.
+    /// Keys of the bind account: AES256 and AES128 with the AD user salt REALM + sAMAccountName (one pair per
+    /// candidate account name). RC4 is not offered: Kerberos.NET needs MD4 for the RC4 key, which .NET does not
+    /// provide on Linux/macOS, so the bind account must allow AES tickets (msDS-SupportedEncryptionTypes 0x18).
+    /// The AD salt convention is not verified against a real domain.
     /// </summary>
     internal static IReadOnlyList<KerberosKey> DeriveKeys(string password, string realm, IEnumerable<string> userNames)
     {
@@ -219,8 +234,6 @@ internal sealed class KerberosProofValidator(
             foreach (var etype in new[] { EncryptionType.AES256_CTS_HMAC_SHA1_96, EncryptionType.AES128_CTS_HMAC_SHA1_96 })
                 keys.Add(new KerberosKey(password, principal, salt: upperRealm + user, etype: etype));
         }
-        keys.Add(new KerberosKey(password, new PrincipalName(PrincipalNameType.NT_PRINCIPAL, upperRealm, ["bind"]),
-            etype: EncryptionType.RC4_HMAC_NT));
         return keys;
     }
 

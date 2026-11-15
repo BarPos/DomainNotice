@@ -294,7 +294,12 @@ internal sealed class AgentProtocol(
         using (await hub.LockAsync(conn.ComputerId, ct))
         {
             // Session changes found here are not reported: OnAgentOnline covers the initial Hello.
-            await inventory.ApplyHelloAsync(conn, hello, ct);
+            var update = await inventory.ApplyHelloAsync(conn, hello, ct);
+            if (update.RefusedReason is { } reason)
+            {
+                await conn.CloseAsync(reason);
+                return false;
+            }
             var spn = directoryOptions.Value.KerberosServicePrincipal;
             await conn.SendAsync(new Welcome
             {
@@ -374,6 +379,11 @@ internal sealed class AgentProtocol(
         {
             if (!ReferenceEquals(hub.Get(conn.ComputerId), conn)) return; // replaced meanwhile
             update = await inventory.ApplyStatusAsync(conn, status, ct);
+        }
+        if (update.RefusedReason is { } reason)
+        {
+            await conn.CloseAsync(reason);
+            return;
         }
         if (update.NameChanged) await adLink.EvaluateNameAsync(conn.ComputerId, ct);
         if (update.SessionsChanged) await observers.SessionsChangedAsync(conn, update.Change, ct);

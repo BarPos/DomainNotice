@@ -75,7 +75,7 @@ public class EnrolmentTests(PostgresFixture pg)
         var refused = await agent.WaitForRefusedAsync();
 
         Assert.Equal(RefusedReasons.RateLimited, refused?.Reason);
-        Assert.Empty(agent.AllReceived.Where(f => f.Message is EnrollResult));
+        Assert.DoesNotContain(agent.AllReceived, f => f.Message is EnrollResult);
     }
 
     [Fact]

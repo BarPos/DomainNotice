@@ -102,7 +102,7 @@ public class AgentListenerTlsTests(PostgresFixture pg)
         var db = await pg.CreateDatabaseAsync();
         await using var server = await TestAgentServer.StartAsync(db);
         await Assert.ThrowsAnyAsync<AuthenticationException>(() =>
-            TestAgentClient.ConnectAsync(server.Endpoint, new string('0', 64)));
+            TestAgentClient.ConnectAsync(server.Endpoint, new string('0', 64), ct: TestContext.Current.CancellationToken));
     }
 
     [Fact]
