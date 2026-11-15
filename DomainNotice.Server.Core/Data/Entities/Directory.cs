@@ -16,8 +16,10 @@ public class DirectoryObject
     public Guid ObjectGuid { get; set; }
     public DirectoryObjectKind Kind { get; set; }
     public string DistinguishedName { get; set; } = "";
-    /// <summary>Lowercased DN for suffix (OU subtree) matching.</summary>
+    /// <summary>Lowercased DN for suffix (OU subtree) matching: the DN exactly as AD returns it (no spaces after
+    /// commas), ToLowerInvariant. Objects under an OU: <c>DistinguishedNameLower.EndsWith("," + ouDnLower)</c>.</summary>
     public string DistinguishedNameLower { get; set; } = "";
+    /// <summary>objectGUID of the parent container; null for the BaseDn object itself.</summary>
     public Guid? ParentGuid { get; set; }
     /// <summary>cn / ou / name.</summary>
     public string Name { get; set; } = "";
@@ -35,14 +37,17 @@ public class DirectoryObject
     public bool Deleted { get; set; }
 }
 
-/// <summary>Direct group membership (member attribute).</summary>
+/// <summary>Direct group membership (member attribute). Only members that are synced objects (under BaseDn);
+/// primaryGroupID membership (e.g. Domain Users) is not included.</summary>
 public class DirectoryMembership
 {
     public Guid GroupGuid { get; set; }
     public Guid MemberGuid { get; set; }
 }
 
-/// <summary>Transitive (nested) membership, recomputed by the sync job. Targeting reads this table.</summary>
+/// <summary>Transitive (nested) membership, recomputed by the sync job. Targeting reads this table.
+/// Every (group, member) pair reachable through nested groups, including the nested groups themselves and the
+/// direct members; a group is never listed as its own member (also not inside a membership cycle).</summary>
 public class DirectoryTransitiveMembership
 {
     public Guid GroupGuid { get; set; }
