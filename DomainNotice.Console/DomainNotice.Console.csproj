@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+    <!-- The web management panel (Blazor interactive server + MudBlazor). Hosted inside DomainNotice.Server (D1). -->
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <RootNamespace>DomainNotice.Console</RootNamespace>
+        <AddRazorSupportForMvc>false</AddRazorSupportForMvc>
+    </PropertyGroup>
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="MudBlazor" />
+        <PackageReference Include="Markdig" />
+    </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\DomainNotice.Server.Core\DomainNotice.Server.Core.csproj" />
+    </ItemGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="DomainNotice.Server.Tests" />
+    </ItemGroup>
+</Project>

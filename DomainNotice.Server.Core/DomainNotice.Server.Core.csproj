@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <!-- Server logic without UI: data model, agent link, announcements, directory, accounts, updates.
+         Used by DomainNotice.Server (host) and DomainNotice.Console (UI). Migrations live in DomainNotice.Server. -->
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <RootNamespace>DomainNotice.Server</RootNamespace>
+    </PropertyGroup>
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+        <PackageReference Include="System.DirectoryServices.Protocols" />
+        <PackageReference Include="Kerberos.NET" />
+        <PackageReference Include="System.Security.Cryptography.Pkcs" />
+        <PackageReference Include="Markdig" />
+    </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\DomainNotice.Shared\DomainNotice.Shared.csproj" />
+    </ItemGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="DomainNotice.Server.Tests" />
+        <InternalsVisibleTo Include="DomainNotice.Server" />
+    </ItemGroup>
+</Project>

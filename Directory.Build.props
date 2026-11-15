@@ -1,0 +1,15 @@
+<Project>
+    <!-- One version for Server, Console and Agent (plan 11.1). AppVersion.Current must match; a test checks it. -->
+    <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
+        <Version>1.0.0</Version>
+        <AssemblyVersion>1.0.0.0</AssemblyVersion>
+        <FileVersion>1.0.0.0</FileVersion>
+        <InformationalVersion>1.0.0</InformationalVersion>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+        <!-- Lets the Windows-only projects build on macOS/Linux too. -->
+        <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    </PropertyGroup>
+</Project>
