@@ -30,9 +30,9 @@ concurrency:
 jobs:
   preflight:
     name: Tag must not exist
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - shell: bash
         run: |
           set -euo pipefail
@@ -51,11 +51,11 @@ jobs:
   release:
     name: GitHub release
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: assets
           merge-multiple: true

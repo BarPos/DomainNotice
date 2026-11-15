@@ -49,6 +49,7 @@ chmod 755 /usr/local/bin/systemctl
 source /src/install.sh
 create_admin_account() { info "(smoke) skipping the first local account"; }
 start_services() { info "(smoke) not starting domainnotice.service"; }
+# shellcheck disable=SC2034 # read by the sourced install.sh functions
 ADMIN_PASSWORD=smoke-test-pw UNATTENDED=1 MODE=install PACKAGE="$pkg" DB_MODE=local SERVER_NAME=dn.example.test CONSOLE_PORT=443 OPEN_FIREWALL=no
 check_system
 do_install >/tmp/install.log 2>&1 || { cat /tmp/install.log; echo "FAIL - install"; exit 1; }

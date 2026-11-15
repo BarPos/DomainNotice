@@ -34,6 +34,7 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
             builder.UseSetting("Paths:Data", dataDir);
             builder.UseSetting("Agents:ListenAddress", "127.0.0.1");
             builder.UseSetting("Agents:Port", "0");
+            builder.UseSetting("Updates:GitHubRepository", ""); // tests make no network calls
             // Test-owned sign-in, so the P4 (Viewer) checks do not depend on which IAdminSignInService is registered.
             builder.ConfigureTestServices(s => s.Replace(ServiceDescriptor.Singleton<IAdminSignInService, TestSignInService>()));
         }

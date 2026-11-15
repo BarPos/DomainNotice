@@ -129,7 +129,11 @@ public class ComputerAdminTests(PostgresFixture pg)
         Assert.Equal(AdLinkState.None, (await AgentLinkTestHelpers.GetComputerAsync(db, id)).AdLinkState);
 
         var guid = await AgentLinkTestHelpers.AddAdComputerAsync(db, "PC-LATE");
-        Assert.Equal(1, await server.Get<AdLinkService>().EvaluatePendingAsync(Ct));
+        // The evaluation that runs when the agent comes online is asynchronous and may still be running on a slow
+        // machine; it can link the computer itself, in which case the explicit run finds nothing left to do.
+        Assert.InRange(await server.Get<AdLinkService>().EvaluatePendingAsync(Ct), 0, 1);
+        await TestAgentServer.WaitUntilAsync(async () =>
+            (await AgentLinkTestHelpers.GetComputerAsync(db, id)).AdLinkState == AdLinkState.MatchedByName);
 
         var c = await AgentLinkTestHelpers.GetComputerAsync(db, id);
         Assert.Equal(AdLinkState.MatchedByName, c.AdLinkState);

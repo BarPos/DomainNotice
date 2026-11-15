@@ -9,22 +9,28 @@ namespace DomainNotice.Agent.Platform;
 /// </summary>
 internal static class ServiceRecovery
 {
-    public static string? Ensure(string serviceName)
+    public static string? Ensure(string serviceName) =>
+        Run("failure", serviceName, "reset=", "86400", "actions=", "restart/60000/restart/60000/restart/60000")
+        // Apply the actions also when the service stops with an error exit code, not only on a crash.
+        ?? Run("failureflag", serviceName, "1");
+
+    private static string? Run(params string[] args)
     {
         try
         {
-            using var sc = Process.Start(new ProcessStartInfo
+            var start = new ProcessStartInfo
             {
                 FileName = Path.Combine(Environment.SystemDirectory, "sc.exe"),
-                ArgumentList = { "failure", serviceName, "reset=", "86400", "actions=", "restart/60000/restart/60000/restart/60000" },
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-            });
+            };
+            foreach (var a in args) start.ArgumentList.Add(a);
+            using var sc = Process.Start(start);
             if (sc is null) return "sc.exe did not start";
             if (!sc.WaitForExit(10_000)) { sc.Kill(); return "sc.exe timed out"; }
-            return sc.ExitCode == 0 ? null : $"sc.exe failure exited with {sc.ExitCode}: {sc.StandardOutput.ReadToEnd().Trim()}";
+            return sc.ExitCode == 0 ? null : $"sc.exe {args[0]} exited with {sc.ExitCode}: {sc.StandardOutput.ReadToEnd().Trim()}";
         }
         catch (Exception ex)
         {

@@ -797,7 +797,7 @@ do_uninstall() {
     local u
     for u in "${UNITS[@]}"; do rm -f -- "$UNIT_DIR/$u"; done
     systemctl daemon-reload
-    rm -rf -- "$INSTALL_ROOT/releases" "$INSTALL_ROOT/bin"
+    rm -rf -- "${INSTALL_ROOT:?}/releases" "${INSTALL_ROOT:?}/bin"
     rm -f -- "$INSTALL_ROOT/current"
     info "Kept: $INSTALL_ROOT/config, $INSTALL_ROOT/data, $INSTALL_ROOT/backups, the database and the $SERVICE_USER user"
 }

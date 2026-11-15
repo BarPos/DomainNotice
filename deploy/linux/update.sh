@@ -341,7 +341,7 @@ dn_rollback() {
     dn_write_result "$state" "$why; rolled back to $CURRENT_VERSION. $note"
     systemctl start --no-block "$DN_SERVICE" || true
     if ! dn_wait_healthy "$CURRENT_VERSION" 60; then dn_log "the old version $CURRENT_VERSION is not healthy either"; fi
-    PHASE=done
+    PHASE="done"
 }
 
 dn_fail() {
@@ -351,10 +351,10 @@ dn_fail() {
     set +e
     if [[ "$PHASE" == stopped || "$PHASE" == migrated || "$PHASE" == switched ]]; then
         dn_rollback "$why"
-    elif [[ "$PHASE" != done ]]; then
+    elif [[ "$PHASE" != "done" ]]; then
         dn_write_result Failed "$why"
         if [[ "$PHASE" == prepared ]]; then systemctl start --no-block "$DN_SERVICE" 2>/dev/null || true; fi
-        PHASE=done
+        PHASE="done"
     fi
     exit 1
 }
@@ -445,7 +445,7 @@ dn_main() {
     # --no-block: with Type=notify a blocking start waits up to TimeoutStartSec; the 2-minute health check decides.
     systemctl start --no-block "$DN_SERVICE" || dn_fail "$DN_SERVICE did not start"
     dn_wait_healthy "$REQ_VERSION" "$HEALTH_TIMEOUT_SECONDS" || dn_fail "$REQ_VERSION was not healthy within $HEALTH_TIMEOUT_SECONDS seconds"
-    PHASE=done
+    PHASE="done"
     trap - ERR
 
     dn_write_result Succeeded "Updated from $CURRENT_VERSION to $REQ_VERSION. Backup: $(basename "$BACKUP_FILE")"

@@ -18,11 +18,11 @@ permissions:
 jobs:
   version:
     name: Version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: v
         shell: bash
         run: |
@@ -35,10 +35,10 @@ jobs:
 
   test:
     name: Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
       - name: Shell checks
@@ -63,10 +63,10 @@ jobs:
   server:
     name: Server + Console tarballs
     needs: version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
       - name: build-server.sh
@@ -78,8 +78,10 @@ jobs:
           test -f "artifacts/DomainNotice.Server-$v-linux-x64.tar.gz"
           test -f "artifacts/DomainNotice.Server-$v-linux-arm64.tar.gz"
           test -f artifacts/install.sh
-          tar -tzf "artifacts/DomainNotice.Server-$v-linux-x64.tar.gz" | grep -q 'wwwroot/_framework/blazor.web.js'
-      - uses: actions/upload-artifact@v4
+          # List to a file first: "tar | grep -q" makes tar fail with a write error under pipefail.
+          tar -tzf "artifacts/DomainNotice.Server-$v-linux-x64.tar.gz" > "$RUNNER_TEMP/server-files.txt"
+          grep -q 'wwwroot/_framework/blazor.web.js' "$RUNNER_TEMP/server-files.txt"
+      - uses: actions/upload-artifact@v7
         with:
           name: server
           if-no-files-found: error
@@ -90,10 +92,10 @@ jobs:
   agent:
     name: Agent MSI
     needs: version
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
       - name: build-agent-msi.ps1
@@ -105,7 +107,7 @@ jobs:
           $msi = "artifacts/DomainNotice.Agent-${{ needs.version.outputs.version }}-x64.msi"
           if (-not (Test-Path $msi)) { throw "build-agent-msi.ps1 did not produce $msi" }
           Get-FileHash -Algorithm SHA256 $msi | Format-List
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agent
           if-no-files-found: error

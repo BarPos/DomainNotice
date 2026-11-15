@@ -97,8 +97,8 @@
                               ThirdFailureActionType="restart"
                               RestartServiceDelayInSeconds="60"
                               ResetPeriodInDays="1" />
-          <!-- Apply the recovery actions also when the service stops with an error exit code (not only on a crash). -->
-          <ServiceConfig OnInstall="yes" OnReinstall="yes" DelayedAutoStart="no" FailureActionsWhen="failedToStopOrReturnedError" />
+          <!-- "Also on an error exit code" (failure actions flag) is set by the service itself at start
+               (ServiceRecovery): the MSI ServiceConfig table is documented as unreliable, and WiX warns about it. -->
         </ServiceInstall>
         <ServiceControl Id="AgentServiceControl" Name="DomainNotice.Agent" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       </Component>

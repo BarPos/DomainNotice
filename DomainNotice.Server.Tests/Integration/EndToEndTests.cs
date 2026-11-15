@@ -187,6 +187,14 @@ public class EndToEndTests(PostgresFixture pg)
             });
             await ctx.SaveChangesAsync(Ct);
         }
+        // The coordinator's OnAgentOnline runs asynchronously after the connect and correctly marks tasks Done for an
+        // agent already at ToVersion (this one is). Wait until that has happened, then put the task back to Sent.
+        await Task.Delay(TimeSpan.FromSeconds(2), Ct);
+        await using (var ctx = db.CreateContext())
+        {
+            await ctx.AgentUpdateTasks.Where(t => t.Id == taskId).ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.State, AgentUpdateState.Sent).SetProperty(t => t.FinishedAtUtc, (DateTime?)null), Ct);
+        }
 
         await agent.SendAsync(new PackageRequest { TaskId = taskId, Offset = 0 }, ct: Ct);
         var first = await agent.ReceiveChunkAsync(TimeSpan.FromSeconds(30), Ct);
