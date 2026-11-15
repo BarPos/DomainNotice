@@ -1,0 +1,23 @@
+<span class="dn-dot @CssClass" title="@Label" role="img" aria-label="@Label"></span>@if (ShowLabel)
+{
+    <span class="ml-2">@Label</span>
+}
+
+@code {
+    [Parameter] public StatusKind Status { get; set; }
+    [Parameter] public bool ShowLabel { get; set; }
+
+    private string CssClass => Status switch
+    {
+        StatusKind.Online => "dn-dot-online",
+        StatusKind.Revoked => "dn-dot-revoked",
+        _ => "dn-dot-offline",
+    };
+
+    private string Label => Status switch
+    {
+        StatusKind.Online => "Online",
+        StatusKind.Revoked => "Revoked",
+        _ => "Offline",
+    };
+}

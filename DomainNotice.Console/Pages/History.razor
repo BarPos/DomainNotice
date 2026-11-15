@@ -1,0 +1,31 @@
+@page "/history"
+@inject NavigationManager Nav
+@inject IOptions<DomainNotice.Server.Options.HistoryOptions> HistoryOptions
+@using Microsoft.Extensions.Options
+
+<PageTitle>History · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudText Typo="Typo.h5">History</MudText>
+    <MudText Typo="Typo.body2">Kept for @HistoryOptions.Value.RetentionDays days after a row is closed; open rows are never pruned.</MudText>
+</div>
+
+<MudTabs Outlined="true" Rounded="true" ActivePanelIndex="Tab" ActivePanelIndexChanged="TabChanged" KeepPanelsAlive="false" TabPanelsClass="pa-4">
+    <MudTabPanel Text="Name history">
+        <DataGrid TRow="NameHistoryRow" List="ConsoleLists.NameHistory" Prefix="n." RowHref="@(r => $"/computers/{r.ComputerId}?tab=1")" />
+    </MudTabPanel>
+    <MudTabPanel Text="User history">
+        <DataGrid TRow="UserHistoryRow" List="ConsoleLists.UserHistory" Prefix="u." RowHref="@(r => $"/computers/{r.ComputerId}?tab=2")" />
+    </MudTabPanel>
+    <MudTabPanel Text="IP history">
+        <DataGrid TRow="IpHistoryRow" List="ConsoleLists.IpHistory" Prefix="i." RowHref="@(r => $"/computers/{r.ComputerId}?tab=3")" />
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    [SupplyParameterFromQuery(Name = "tab")] public int? TabParam { get; set; }
+    private int Tab => Math.Clamp(TabParam ?? 0, 0, 2);
+
+    private void TabChanged(int index) =>
+        Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", index == 0 ? null : index), replace: true);
+}

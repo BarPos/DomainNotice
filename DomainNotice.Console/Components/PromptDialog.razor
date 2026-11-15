@@ -1,0 +1,73 @@
+@* A small dialog asking for one or two text values (e.g. a new password with confirmation). Returns the first value. *@
+<MudDialog>
+    <TitleContent>@Title</TitleContent>
+    <DialogContent>
+        @if (!string.IsNullOrEmpty(Message))
+        {
+            <MudText Typo="Typo.body2" Class="mb-3">@Message</MudText>
+        }
+        <MudTextField T="string" @bind-Value="_value" Label="@Label" InputType="@(Secret ? InputType.Password : InputType.Text)"
+                      Variant="Variant.Outlined" Immediate="true" AutoFocus="true" />
+        @if (Confirm)
+        {
+            <MudTextField T="string" @bind-Value="_confirm" Label="@($"Repeat {Label.ToLowerInvariant()}")" Class="mt-3"
+                          InputType="@(Secret ? InputType.Password : InputType.Text)" Variant="Variant.Outlined" Immediate="true" />
+        }
+        @if (_error is not null)
+        {
+            <MudText Color="Color.Error" Typo="Typo.body2" Class="mt-2">@_error</MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Ok">@OkText</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string? Message { get; set; }
+    [Parameter] public string Label { get; set; } = "Value";
+    [Parameter] public string OkText { get; set; } = "OK";
+    [Parameter] public bool Secret { get; set; }
+    [Parameter] public bool Confirm { get; set; }
+    [Parameter] public int MinLength { get; set; }
+
+    private string? _value;
+    private string? _confirm;
+    private string? _error;
+
+    private void Ok()
+    {
+        if (string.IsNullOrEmpty(_value) || _value.Length < MinLength)
+        {
+            _error = MinLength > 0 ? $"Enter at least {MinLength} characters." : "Enter a value.";
+            return;
+        }
+        if (Confirm && _value != _confirm)
+        {
+            _error = "The values do not match.";
+            return;
+        }
+        Dialog.Close(DialogResult.Ok(_value));
+    }
+
+    /// <summary>Shows the dialog and returns the entered value, or null when cancelled.</summary>
+    public static async Task<string?> AskAsync(IDialogService dialogs, string title, string label, string okText = "OK",
+        bool secret = false, bool confirm = false, int minLength = 0, string? message = null)
+    {
+        var parameters = new DialogParameters<PromptDialog>
+        {
+            { x => x.Title, title }, { x => x.Label, label }, { x => x.OkText, okText }, { x => x.Secret, secret },
+            { x => x.Confirm, confirm }, { x => x.MinLength, minLength }, { x => x.Message, message },
+        };
+        var dialog = await dialogs.ShowAsync<PromptDialog>(title, parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        return result is { Canceled: false, Data: string s } ? s : null;
+    }
+
+    /// <summary>A confirm box for destructive actions. True only when the user confirms.</summary>
+    public static async Task<bool> ConfirmAsync(IDialogService dialogs, string title, string message, string yesText) =>
+        await dialogs.ShowMessageBoxAsync(title, message, yesText: yesText, cancelText: "Cancel") == true;
+}

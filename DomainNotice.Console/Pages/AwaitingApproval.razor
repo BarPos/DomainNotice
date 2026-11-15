@@ -1,0 +1,123 @@
+@page "/computers/awaiting"
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IComputerAdminService ComputerAdmin
+@inject ConsoleUser Me
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject BrowserClock Clock
+
+<PageTitle>Awaiting approval · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Href="/computers" aria-label="Back to computers" />
+    <MudText Typo="Typo.h5">Awaiting approval</MudText>
+</div>
+<MudText Typo="Typo.body2" Class="mb-4">
+    These computers claim the name of a computer that is already linked to another enrolled key, and have no Kerberos proof.
+    Until you decide, they receive only Everyone and User announcements (or nothing, see Settings).
+</MudText>
+
+@if (_items is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else if (_items.Count == 0)
+{
+    <MudAlert Severity="Severity.Success">Nothing is waiting for approval.</MudAlert>
+}
+else
+{
+    @foreach (var item in _items)
+    {
+        <MudPaper Outlined="true" Class="pa-4 mb-4">
+            <div class="dn-compare">
+                <div>
+                    <MudText Typo="Typo.subtitle1" Class="mb-2">Current record (holds the AD link)</MudText>
+                    @if (item.Old is null)
+                    {
+                        <MudText>The record holding the link no longer exists.</MudText>
+                    }
+                    else
+                    {
+                        @Card(item.Old)
+                    }
+                </div>
+                <div>
+                    <MudText Typo="Typo.subtitle1" Class="mb-2">New record (awaiting approval)</MudText>
+                    @Card(item.New)
+                </div>
+            </div>
+            <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+                <div class="d-flex flex-wrap gap-2 mt-4">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.SwapHoriz" OnClick="@(() => ReplaceAsync(item))">Replace the old computer</MudButton>
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.CallSplit" OnClick="@(() => KeepBothAsync(item))">Keep both</MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Block" OnClick="@(() => RevokeAsync(item))">Revoke the new key</MudButton>
+                </div>
+            </AuthorizeView>
+        </MudPaper>
+    }
+}
+
+@code {
+    private sealed record Item(Computer New, Computer? Old);
+    private List<Item>? _items;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (RendererInfo.IsInteractive) await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var waiting = await db.Computers.AsNoTracking().Include(c => c.Sessions)
+            .Where(c => c.AdLinkState == AdLinkState.AwaitingApproval && c.RevokedAtUtc == null)
+            .OrderBy(c => c.Name).ToListAsync();
+        var oldIds = waiting.Where(c => c.ConflictsWithComputerId != null).Select(c => c.ConflictsWithComputerId!.Value).ToList();
+        var olds = await db.Computers.AsNoTracking().Include(c => c.Sessions).Where(c => oldIds.Contains(c.Id)).ToDictionaryAsync(c => c.Id);
+        _items = waiting.Select(n => new Item(n, n.ConflictsWithComputerId is { } id && olds.TryGetValue(id, out var o) ? o : null)).ToList();
+    }
+
+    private RenderFragment Card(Computer c) => @<dl class="dn-kv">
+        <dt>Name</dt><dd><MudLink Href="@($"/computers/{c.Id}")">@c.Name</MudLink></dd>
+        <dt>Status</dt><dd><StatusDot Status="@(c.Online ? StatusKind.Online : StatusKind.Offline)" ShowLabel="true" /></dd>
+        <dt>Enrolled</dt><dd>@Clock.Format(c.EnrolledAtUtc)</dd>
+        <dt>Last seen</dt><dd>@Clock.Format(c.LastSeenAtUtc)</dd>
+        <dt>Remote IP</dt><dd>@c.RemoteIp</dd>
+        <dt>Local IPs</dt><dd>@string.Join(", ", c.LocalIps)</dd>
+        <dt>Current users</dt><dd>@(c.Sessions.Count == 0 ? "None" : string.Join(", ", c.Sessions.Select(s => s.UserName)))</dd>
+        <dt>Agent version</dt><dd>@c.AgentVersion</dd>
+        <dt>OS</dt><dd>@c.OsVersion</dd>
+        <dt>Key fingerprint</dt><dd class="dn-mono">@KeyFingerprint.Display(c.AgentKeyFingerprint)</dd>
+    </dl>;
+
+    private async Task ReplaceAsync(Item item)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Replace the old computer",
+                $"Move the AD link of {item.New.Name} to the new key? The old record is marked replaced and its history is shown on the new one.", "Replace")) return;
+        await DoneAsync(await ComputerAdmin.ApproveReplaceAsync(item.New.Id, actor), "The new record replaced the old one.");
+    }
+
+    private async Task KeepBothAsync(Item item)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Keep both",
+                $"Keep the new {item.New.Name} as a separate computer, not linked to AD?", "Keep both")) return;
+        await DoneAsync(await ComputerAdmin.KeepSeparateAsync(item.New.Id, actor), "Both records are kept.");
+    }
+
+    private async Task RevokeAsync(Item item)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Revoke the new key",
+                $"Revoke the new {item.New.Name}? Its key is refused from now on.", "Revoke")) return;
+        await DoneAsync(await ComputerAdmin.RevokeAsync(item.New.Id, actor), "The new key was revoked.");
+    }
+
+    private async Task DoneAsync(OperationResult result, string message)
+    {
+        Snackbar.Add(result.Ok ? message : result.Error ?? "The action failed.", result.Ok ? Severity.Success : Severity.Error);
+        await LoadAsync();
+    }
+}

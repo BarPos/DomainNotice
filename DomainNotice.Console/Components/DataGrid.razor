@@ -1,0 +1,549 @@
+@typeparam TRow
+@implements IDisposable
+@inject NavigationManager Nav
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject TimeProvider Time
+@inject IServiceProvider Services
+@inject BrowserClock Clock
+@inject ILogger<DataGrid<TRow>> Logger
+@*
+    The shared server-side grid (plan 9.3). Its whole state (search, filter chips, sort, page, page size, columns) is in
+    the URL query string under Prefix, so a view can be bookmarked; every change navigates, and the grid reloads when
+    the URL changes. Filtering, sorting and paging run in PostgreSQL through the list definition (IGridList).
+*@
+
+<MudPaper Outlined="true" Class="dn-grid">
+    <div class="dn-grid-toolbar">
+        <MudTextField T="string" Value="_searchText" ValueChanged="SearchChanged" Placeholder="Search" DebounceInterval="400"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined"
+                      Margin="Margin.Dense" Clearable="true" Class="dn-grid-search" aria-label="Search this list" />
+        <MudButton StartIcon="@Icons.Material.Filled.FilterList" Variant="Variant.Text" OnClick="@(() => OpenEditor(null))"
+                   Disabled="@(!_fields.Any(f => f.Filterable))">Add filter</MudButton>
+        @ToolbarContent
+        <MudSpacer />
+        <MudMenu Icon="@Icons.Material.Filled.ViewColumn" Dense="true" AriaLabel="Choose columns" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+            <MudText Typo="Typo.caption" Class="px-4 pt-2">Columns</MudText>
+            @foreach (var col in List.Columns)
+            {
+                var visible = IsVisible(col);
+                <MudMenuItem AutoClose="false" OnClick="@(() => ToggleColumn(col))"
+                             Icon="@(visible ? Icons.Material.Filled.CheckBox : Icons.Material.Filled.CheckBoxOutlineBlank)">@col.Label</MudMenuItem>
+            }
+            <MudDivider />
+            <MudMenuItem OnClick="ResetColumns">Default columns</MudMenuItem>
+        </MudMenu>
+        <MudTooltip Text="Reload">
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" OnClick="ReloadAsync" aria-label="Reload" />
+        </MudTooltip>
+        <MudTooltip Text="Export the filtered list as CSV">
+            <MudButton Href="@ExportUrl" StartIcon="@Icons.Material.Filled.Download" Variant="Variant.Text" download="">CSV</MudButton>
+        </MudTooltip>
+    </div>
+
+    @if (_editorOpen)
+    {
+        <FilterEditor @key="@_editorField" Fields="_fields" InitialField="@_editorField" OnApply="AddFilter" OnCancel="@(() => _editorOpen = false)" />
+    }
+
+    @if (_query.Filters.Count > 0)
+    {
+        <div class="dn-grid-chips">
+            @foreach (var clause in _query.Filters)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" OnClose="@(() => RemoveFilter(clause))">
+                    @ChipText(clause)
+                </MudChip>
+            }
+            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ClearFilters">Clear all</MudButton>
+        </div>
+    }
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+    }
+
+    <MudSimpleTable Dense="true" Hover="true" Bordered="false" Striped="false" Elevation="0">
+        <thead>
+            <tr>
+                @if (Selectable)
+                {
+                    <th class="dn-check">
+                        <MudCheckBox T="bool?" Value="HeaderChecked" ValueChanged="ToggleAllOnPage" TriState="true" Dense="true" Size="Size.Small"
+                                     aria-label="Select all rows on this page" />
+                    </th>
+                }
+                @foreach (var col in VisibleColumns)
+                {
+                    var sortable = col.SortField is not null && _fields.Any(f => f.Key == col.SortField && f.Sortable);
+                    var filterable = _fields.FirstOrDefault(f => f.Key == (col.SortField ?? col.Key) && f.Filterable);
+                    <th class="@(sortable ? "dn-sortable" : "")" @onclick="@(() => SortBy(col, sortable))">
+                        <span class="dn-th">
+                            @col.Label
+                            @if (sortable && IsSortedBy(col))
+                            {
+                                <MudIcon Icon="@(SortDescending ? Icons.Material.Filled.ArrowDownward : Icons.Material.Filled.ArrowUpward)" Size="Size.Small" />
+                            }
+                            @if (filterable is not null)
+                            {
+                                <span @onclick:stopPropagation="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.FilterAlt" Size="Size.Small" Class="pa-0 ml-1" aria-label="@($"Filter {col.Label}")"
+                                                   OnClick="@(() => OpenEditor(filterable.Key))" />
+                                </span>
+                            }
+                        </span>
+                    </th>
+                }
+            </tr>
+        </thead>
+        <tbody>
+            @if (_error is not null)
+            {
+                <tr><td colspan="@ColumnCount"><MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert></td></tr>
+            }
+            else if (_rows.Count == 0)
+            {
+                <tr><td colspan="@ColumnCount" class="dn-grid-empty">@(_loaded ? "No items match." : "Loading…")</td></tr>
+            }
+            @for (var index = 0; index < _rows.Count; index++)
+            {
+                var row = _rows[index];
+                var key = List.RowKey(row);
+                var selected = _selected.ContainsKey(key);
+                @* Rows without identity (anonymous answers) can be equal; they are keyed by position. *@
+                <tr class="@RowClass(selected)" @key="@(List.Selectable ? key : index)" @onclick="@(() => RowClicked(row))"
+                    @oncontextmenu="@(e => OpenContextMenuAsync(e, row))" @oncontextmenu:preventDefault="@(ContextMenu is not null)">
+                    @if (Selectable)
+                    {
+                        <td class="dn-check" @onclick:stopPropagation="true">
+                            <MudCheckBox T="bool" Value="selected" ValueChanged="@(v => ToggleRow(row, v))" Dense="true" Size="Size.Small" aria-label="Select row" />
+                        </td>
+                    }
+                    @foreach (var col in VisibleColumns)
+                    {
+                        <td>@RenderCell(row, col)</td>
+                    }
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+
+    <div class="dn-grid-footer">
+        <MudText Typo="Typo.body2">@RangeText</MudText>
+        <MudSelect T="int" Value="_query.PageSize" ValueChanged="PageSizeChanged" Dense="true" Variant="Variant.Text" Margin="Margin.Dense"
+                   Style="max-width: 110px" aria-label="Rows per page">
+            @foreach (var size in GridQuery.PageSizes)
+            {
+                <MudSelectItem Value="@size">@size per page</MudSelectItem>
+            }
+        </MudSelect>
+        <MudPagination Count="PageCount" Selected="_query.Page" SelectedChanged="PageChanged" Size="Size.Small" BoundaryCount="1" MiddleCount="3" />
+    </div>
+
+    @if (Selectable && _selected.Count > 0)
+    {
+        <div class="dn-actionbar">
+            <MudText Typo="Typo.body2" Class="mr-2"><b>@_selected.Count</b> selected</MudText>
+            @if (ActionBar is not null)
+            {
+                @ActionBar(_selected.Values.ToList())
+            }
+            <MudSpacer />
+            <MudButton Variant="Variant.Text" OnClick="ClearSelection">Clear selection</MudButton>
+        </div>
+    }
+</MudPaper>
+
+<MudMenu @ref="_contextMenu" PositionAtCursor="true" Dense="true">
+    <ActivatorContent><span></span></ActivatorContent>
+    <ChildContent>
+        @if (_contextRow is { } contextRow && ContextMenu is not null)
+        {
+            @ContextMenu(contextRow)
+        }
+    </ChildContent>
+</MudMenu>
+
+@code {
+    [Parameter, EditorRequired] public IGridList<TRow> List { get; set; } = default!;
+    /// <summary>URL key prefix, so several grids can share a page ("n." → n.q, n.f, n.sort …).</summary>
+    [Parameter] public string Prefix { get; set; } = "";
+    /// <summary>Scope values owned by the page (tree node, parent id). They are also passed to the CSV export.</summary>
+    [Parameter] public IReadOnlyDictionary<string, string?>? Scope { get; set; }
+    /// <summary>Custom cell renderers by column key; other columns render by kind.</summary>
+    [Parameter] public IReadOnlyDictionary<string, RenderFragment<TRow>>? Cells { get; set; }
+    /// <summary>Buttons in the action bar at the bottom, for the selected rows.</summary>
+    [Parameter] public RenderFragment<IReadOnlyList<TRow>>? ActionBar { get; set; }
+    /// <summary>Right-click menu items for a row (MudMenuItem elements).</summary>
+    [Parameter] public RenderFragment<TRow>? ContextMenu { get; set; }
+    [Parameter] public RenderFragment? ToolbarContent { get; set; }
+    [Parameter] public EventCallback<TRow> OnRowClick { get; set; }
+    [Parameter] public Func<TRow, string?>? RowHref { get; set; }
+
+    private GridQuery _query = new();
+    private string? _searchText;
+    private string? _stateKey;
+    private IReadOnlyList<GridFieldInfo> _fields = [];
+    private List<TRow> _rows = [];
+    private int _total;
+    private bool _loading;
+    private bool _loaded;
+    private string? _error;
+    private bool _editorOpen;
+    private string? _editorField;
+    private readonly Dictionary<object, TRow> _selected = new();
+    private MudMenu? _contextMenu;
+    private TRow? _contextRow;
+    private CancellationTokenSource? _cts;
+
+    private bool Selectable => List.Selectable && (ActionBar is not null);
+    private int ColumnCount => VisibleColumns.Count + (Selectable ? 1 : 0);
+    private int PageCount => Math.Max(1, (int)Math.Ceiling(_total / (double)Math.Max(1, _query.PageSize)));
+    private string? SortKey => _query.Sort ?? List.DefaultSort;
+    private bool SortDescending => _query.Sort is null ? List.DefaultDescending : _query.Descending;
+
+    private IReadOnlyList<GridColumn<TRow>> VisibleColumns =>
+        _query.Columns is { Count: > 0 } keys && List.Columns.Where(c => keys.Contains(c.Key)).ToList() is { Count: > 0 } chosen
+            ? chosen
+            : List.Columns.Where(c => c.DefaultVisible).ToList();
+
+    private string RangeText => _total == 0
+        ? "0 items"
+        : $"{(_query.Page - 1) * _query.PageSize + 1}–{Math.Min(_total, _query.Page * _query.PageSize)} of {_total}";
+
+    private bool? HeaderChecked
+    {
+        get
+        {
+            if (_rows.Count == 0) return false;
+            var count = _rows.Count(r => _selected.ContainsKey(List.RowKey(r)));
+            return count == 0 ? false : count == _rows.Count ? true : null;
+        }
+    }
+
+    private Dictionary<string, string?> EffectiveScope =>
+        List.ScopeKeys.ToDictionary(k => k, k => Scope is not null && Scope.TryGetValue(k, out var v) ? v : null);
+
+    private string ExportUrl
+    {
+        get
+        {
+            var q = _query.Clone();
+            q.Page = 1;
+            var parts = new List<string> { q.ToQueryString() };
+            parts.AddRange(EffectiveScope.Where(kv => !string.IsNullOrEmpty(kv.Value))
+                .Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value!)}"));
+            return $"/export/{List.Name}.csv?{string.Join('&', parts.Where(p => p.Length > 0))}";
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        Clock.Changed += OnClockChanged;
+    }
+
+    private void OnClockChanged() => InvokeAsync(StateHasChanged);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        ReadUrl();
+        await LoadIfChangedAsync();
+    }
+
+    private void ReadUrl()
+    {
+        var uri = new Uri(Nav.Uri);
+        _query = GridQuery.Parse(uri.Query, Prefix);
+        if (!_editorOpen) _searchText = _query.Search;
+    }
+
+    private async Task LoadIfChangedAsync()
+    {
+        if (!RendererInfo.IsInteractive) return; // no database work during prerender
+        var key = _query.ToQueryString() + "|" + string.Join('&', EffectiveScope.Select(kv => kv.Key + "=" + kv.Value));
+        if (key == _stateKey) return;
+        var scopeChanged = _stateKey is not null && _stateKey.Split('|').Last() != key.Split('|').Last();
+        var filterChanged = _stateKey is not null && !SameFilter(_stateKey, key);
+        _stateKey = key;
+        if (scopeChanged || filterChanged) _selected.Clear();
+        await LoadAsync();
+    }
+
+    private static bool SameFilter(string a, string b)
+    {
+        static string Strip(string k) => string.Join('&', k.Split('&').Where(p => !p.StartsWith("page=") && !p.StartsWith("size=") && !p.StartsWith("sort=") && !p.StartsWith("cols=")));
+        return Strip(a) == Strip(b);
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            ReadUrl();
+            await LoadIfChangedAsync();
+            StateHasChanged();
+        });
+
+    /// <summary>Reloads the current page (after an action).</summary>
+    public async Task ReloadAsync()
+    {
+        await LoadAsync();
+        StateHasChanged();
+    }
+
+    private async Task LoadAsync()
+    {
+        _cts?.Cancel();
+        var cts = _cts = new CancellationTokenSource();
+        _loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync(cts.Token);
+            var ctx = new GridContext(db, EffectiveScope, Time.GetUtcNow().UtcDateTime, Services);
+            if (_fields.Count == 0) _fields = List.GetFields(ctx);
+            var page = await List.QueryAsync(ctx, _query, cts.Token);
+            if (cts.IsCancellationRequested) return;
+            _rows = page.Rows.ToList();
+            _total = page.Total;
+            _error = null;
+            // Keep selected rows fresh where they are on this page.
+            foreach (var row in _rows)
+                if (_selected.ContainsKey(List.RowKey(row))) _selected[List.RowKey(row)] = row;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Loading list {List} failed", List.Name);
+            _error = "The list could not be loaded. Try again, or remove a filter.";
+            _rows = [];
+            _total = 0;
+        }
+        finally
+        {
+            if (ReferenceEquals(cts, _cts))
+            {
+                _loading = false;
+                _loaded = true;
+            }
+        }
+    }
+
+    private void Navigate(GridQuery q, bool replace = false) =>
+        Nav.NavigateTo(Nav.GetUriWithQueryParameters(q.ToQueryParameters(Prefix)), replace: replace);
+
+    private void SearchChanged(string? text)
+    {
+        _searchText = text;
+        var q = _query.Clone();
+        q.Search = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+        q.Page = 1;
+        Navigate(q, replace: true);
+    }
+
+    private void OpenEditor(string? field)
+    {
+        // @key on the editor recreates it when another column's filter icon is clicked.
+        _editorField = field;
+        _editorOpen = true;
+    }
+
+    private void AddFilter(FilterClause clause)
+    {
+        _editorOpen = false;
+        var q = _query.Clone();
+        q.Filters.RemoveAll(f => f == clause);
+        q.Filters.Add(clause);
+        q.Page = 1;
+        Navigate(q);
+    }
+
+    private void RemoveFilter(FilterClause clause)
+    {
+        var q = _query.Clone();
+        q.Filters.Remove(clause);
+        q.Page = 1;
+        Navigate(q);
+    }
+
+    private void ClearFilters()
+    {
+        var q = _query.Clone();
+        q.Filters.Clear();
+        q.Search = null;
+        q.Page = 1;
+        _searchText = null;
+        Navigate(q);
+    }
+
+    private bool IsSortedBy(GridColumn<TRow> col) => string.Equals(col.SortField, SortKey, StringComparison.OrdinalIgnoreCase);
+
+    private void SortBy(GridColumn<TRow> col, bool sortable)
+    {
+        if (!sortable) return;
+        var q = _query.Clone();
+        if (IsSortedBy(col))
+        {
+            q.Sort = col.SortField;
+            q.Descending = !SortDescending;
+        }
+        else
+        {
+            q.Sort = col.SortField;
+            q.Descending = false;
+        }
+        q.Page = 1;
+        Navigate(q);
+    }
+
+    private void PageChanged(int page)
+    {
+        var q = _query.Clone();
+        q.Page = Math.Clamp(page, 1, PageCount);
+        Navigate(q);
+    }
+
+    private void PageSizeChanged(int size)
+    {
+        var q = _query.Clone();
+        q.PageSize = size;
+        q.Page = 1;
+        Navigate(q);
+    }
+
+    private bool IsVisible(GridColumn<TRow> col) => VisibleColumns.Contains(col);
+
+    private void ToggleColumn(GridColumn<TRow> col)
+    {
+        var keys = VisibleColumns.Select(c => c.Key).ToList();
+        if (keys.Contains(col.Key)) { if (keys.Count > 1) keys.Remove(col.Key); }
+        else keys.Add(col.Key);
+        var q = _query.Clone();
+        // Keep the definition order.
+        q.Columns = List.Columns.Select(c => c.Key).Where(keys.Contains).ToList();
+        Navigate(q, replace: true);
+    }
+
+    private void ResetColumns()
+    {
+        var q = _query.Clone();
+        q.Columns = null;
+        Navigate(q, replace: true);
+    }
+
+    private void ToggleRow(TRow row, bool selected)
+    {
+        var key = List.RowKey(row);
+        if (selected) _selected[key] = row;
+        else _selected.Remove(key);
+    }
+
+    private void ToggleAllOnPage(bool? _)
+    {
+        var all = HeaderChecked == true;
+        foreach (var row in _rows)
+        {
+            if (all) _selected.Remove(List.RowKey(row));
+            else _selected[List.RowKey(row)] = row;
+        }
+    }
+
+    public void ClearSelection() => _selected.Clear();
+
+    private string RowClass(bool selected) =>
+        (selected ? "dn-selected " : "") + (OnRowClick.HasDelegate || RowHref is not null ? "dn-clickable" : "");
+
+    private async Task RowClicked(TRow row)
+    {
+        if (RowHref?.Invoke(row) is { } href) Nav.NavigateTo(href);
+        else if (OnRowClick.HasDelegate) await OnRowClick.InvokeAsync(row);
+    }
+
+    private async Task OpenContextMenuAsync(MouseEventArgs e, TRow row)
+    {
+        if (ContextMenu is null || _contextMenu is null) return;
+        _contextRow = row;
+        StateHasChanged();
+        await _contextMenu.OpenMenuAsync(e);
+    }
+
+    private string ChipText(FilterClause clause)
+    {
+        var field = _fields.FirstOrDefault(f => f.Key == clause.Field);
+        var label = field?.Label ?? clause.Field;
+        string Option(string v) => field?.Options.FirstOrDefault(o => string.Equals(o.Value, v, StringComparison.OrdinalIgnoreCase))?.Label ?? v;
+        switch (clause.Op)
+        {
+            case FilterOp.Contains: return $"{label} contains \"{clause.Value}\"";
+            case FilterOp.Equals when field?.Kind == FieldKind.Bool: return $"{label}: {Option(clause.Value)}";
+            case FilterOp.Equals when field?.Kind == FieldKind.Choice: return $"{label} is {string.Join(" or ", clause.ParseList().Select(Option))}";
+            case FilterOp.Equals: return $"{label} is \"{clause.Value}\"";
+            case FilterOp.OlderThanDays: return $"{label} older than {clause.Value} days";
+            case FilterOp.WithinDays: return $"{label} within the last {clause.Value} days";
+            case FilterOp.AtLeast: return $"{label} ≥ {clause.Value}";
+            case FilterOp.AtMost: return $"{label} ≤ {clause.Value}";
+            case FilterOp.Between:
+                var (from, to) = clause.ParseRange();
+                return from is not null && to is not null ? $"{label} {Clock.FormatDate(from)} – {Clock.FormatDate(to)}"
+                    : from is not null ? $"{label} from {Clock.FormatDate(from)}" : $"{label} until {Clock.FormatDate(to)}";
+            default: return $"{label} {clause.Value}";
+        }
+    }
+
+    private RenderFragment RenderCell(TRow row, GridColumn<TRow> col) => builder =>
+    {
+        if (Cells is not null && Cells.TryGetValue(col.Key, out var custom))
+        {
+            builder.AddContent(0, custom(row));
+            return;
+        }
+        var value = col.Value(row);
+        switch (col.Kind)
+        {
+            case ColumnKind.Status when value is StatusKind status:
+                builder.OpenComponent<StatusDot>(1);
+                builder.AddComponentParameter(2, nameof(StatusDot.Status), status);
+                builder.CloseComponent();
+                break;
+            case ColumnKind.Date:
+                builder.AddContent(3, Clock.Format(value as DateTime?));
+                break;
+            case ColumnKind.Bool:
+                builder.AddContent(4, value is true ? "Yes" : "No");
+                break;
+            case ColumnKind.Percent when value is double rate:
+                builder.OpenElement(5, "div");
+                builder.AddAttribute(6, "class", "dn-rate");
+                builder.OpenComponent<MudProgressLinear>(7);
+                builder.AddComponentParameter(8, nameof(MudProgressLinear.Value), rate * 100);
+                builder.AddComponentParameter(9, nameof(MudProgressLinear.Color), Color.Success);
+                builder.CloseComponent();
+                builder.AddContent(10, $"{rate * 100:0}%");
+                builder.CloseElement();
+                break;
+            default:
+                if (value is not string && value is IEnumerable<string> many)
+                {
+                    builder.OpenElement(11, "div");
+                    builder.AddAttribute(12, "class", "dn-cell-list");
+                    foreach (var item in many)
+                    {
+                        builder.OpenElement(13, "span");
+                        builder.AddContent(14, item);
+                        builder.CloseElement();
+                    }
+                    builder.CloseElement();
+                }
+                else builder.AddContent(15, value?.ToString());
+                break;
+        }
+    };
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        Clock.Changed -= OnClockChanged;
+        _cts?.Cancel();
+    }
+}

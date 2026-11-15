@@ -1,0 +1,49 @@
+@* Preview styled like the agent's announcement window. Html must come from IAnnouncementService.RenderPreviewHtml
+   (Markdig with raw HTML disabled) — the only place the Console renders HTML built from user content. *@
+<div class="dn-agent-window" aria-label="Preview of the agent window">
+    <div class="dn-agent-titlebar">
+        <span>@(string.IsNullOrWhiteSpace(Title) ? "(no title)" : Title)</span>
+        <span>DomainNotice</span>
+    </div>
+    <div class="dn-agent-body dn-markdown">
+        @((MarkupString)Html)
+    </div>
+    @if (Questions.Any(q => !q.Hidden))
+    {
+        <div class="dn-agent-questions">
+            @foreach (var q in Questions.Where(q => !q.Hidden))
+            {
+                <div class="dn-agent-question">
+                    <div><b>@q.Prompt</b>@(q.Required ? " *" : "")</div>
+                    @foreach (var o in q.Options)
+                    {
+                        <label><input type="@(q.Kind == QuestionKind.Multiple ? "checkbox" : "radio")" disabled /> @o.Label</label>
+                    }
+                </div>
+            }
+        </div>
+    }
+    <div class="dn-agent-buttons">
+        <span class="dn-agent-countdown">@UnlockText</span>
+        @for (var i = 0; i < Buttons.Count; i++)
+        {
+            <button type="button" class="dn-agent-button @(i == 0 ? "dn-agent-button-primary" : "")" disabled>@Buttons[i]</button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string Html { get; set; } = "";
+    [Parameter] public IReadOnlyList<string> Buttons { get; set; } = [];
+    [Parameter] public IReadOnlyList<QuestionEdit> Questions { get; set; } = [];
+    [Parameter] public int MinSeconds { get; set; }
+    [Parameter] public UnlockMode UnlockMode { get; set; }
+
+    private string UnlockText => UnlockMode switch
+    {
+        UnlockMode.AfterTime => $"Buttons unlock after {MinSeconds} s",
+        UnlockMode.AfterRequired => "Buttons unlock when required questions are answered",
+        _ => $"Buttons unlock after {MinSeconds} s and required answers",
+    };
+}

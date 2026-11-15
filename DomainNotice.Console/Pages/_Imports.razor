@@ -1,0 +1,2 @@
+@* Every page needs an Admin or Viewer; mutating actions check Admin in their handlers (ConsoleUser.RequireAdminAsync). *@
+@attribute [Authorize(Policy = ConsoleAuth.ViewerPolicy)]

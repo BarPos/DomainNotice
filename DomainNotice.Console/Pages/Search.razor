@@ -1,0 +1,110 @@
+@page "/search"
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject BrowserClock Clock
+
+<PageTitle>Search · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudText Typo="Typo.h5">Search results for "@Q"</MudText>
+</div>
+
+@if (string.IsNullOrWhiteSpace(Q))
+{
+    <MudText>Type in the search box at the top.</MudText>
+}
+else if (_result is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    <div class="dn-tiles">
+        <MudPaper Outlined="true" Class="pa-3">
+            <div class="d-flex align-center mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Computer" Class="mr-2" /><MudText Typo="Typo.subtitle1">Computers</MudText>
+                <MudSpacer /><MudLink Href="@($"/computers?q={Uri.EscapeDataString(Q)}")" Typo="Typo.body2">Open in list</MudLink>
+            </div>
+            @if (_result.Computers.Count == 0) { <MudText Typo="Typo.body2">No match.</MudText> }
+            @foreach (var c in _result.Computers)
+            {
+                <div class="d-flex align-center gap-2 py-1">
+                    <StatusDot Status="c.Status" /><MudLink Href="@($"/computers/{c.Id}")">@c.Name</MudLink>
+                    <MudText Typo="Typo.caption">@c.RemoteIp @string.Join(", ", c.Users)</MudText>
+                </div>
+            }
+        </MudPaper>
+
+        <MudPaper Outlined="true" Class="pa-3">
+            <div class="d-flex align-center mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Person" Class="mr-2" /><MudText Typo="Typo.subtitle1">Users</MudText>
+                <MudSpacer /><MudLink Href="@($"/history?tab=1&u.q={Uri.EscapeDataString(Q)}")" Typo="Typo.body2">User history</MudLink>
+            </div>
+            @if (_result.Users.Count == 0) { <MudText Typo="Typo.body2">No match.</MudText> }
+            @foreach (var u in _result.Users)
+            {
+                <div class="py-1">
+                    <MudLink Href="@($"/history?tab=1&u.f={Uri.EscapeDataString("user:eq:" + u.Name)}")">@u.Name</MudLink>
+                    @if (u.LoggedOnAt.Count > 0)
+                    {
+                        <MudText Typo="Typo.caption" Inline="true" Class="ml-2">logged on at @string.Join(", ", u.LoggedOnAt)</MudText>
+                    }
+                </div>
+            }
+        </MudPaper>
+
+        <MudPaper Outlined="true" Class="pa-3">
+            <div class="d-flex align-center mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Campaign" Class="mr-2" /><MudText Typo="Typo.subtitle1">Announcements</MudText>
+                <MudSpacer /><MudLink Href="@($"/announcements?q={Uri.EscapeDataString(Q)}")" Typo="Typo.body2">Open in list</MudLink>
+            </div>
+            @if (_result.Announcements.Count == 0) { <MudText Typo="Typo.body2">No match.</MudText> }
+            @foreach (var a in _result.Announcements)
+            {
+                <div class="py-1"><MudLink Href="@($"/announcements/{a.Id}")">@a.Title</MudLink> <MudText Typo="Typo.caption" Inline="true">@Clock.Format(a.StartUtc)</MudText></div>
+            }
+        </MudPaper>
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "q")] public string? Q { get; set; }
+
+    private sealed record ComputerHit(Guid Id, string Name, string? RemoteIp, List<string> Users, StatusKind Status);
+    private sealed record UserHit(string Name, List<string> LoggedOnAt);
+    private sealed record AnnouncementHit(Guid Id, string Title, DateTime StartUtc);
+    private sealed record Result(List<ComputerHit> Computers, List<UserHit> Users, List<AnnouncementHit> Announcements);
+
+    private Result? _result;
+    private string? _loadedFor;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!RendererInfo.IsInteractive || string.IsNullOrWhiteSpace(Q) || Q == _loadedFor) return;
+        _loadedFor = Q;
+        _result = null;
+        var term = Q.Trim().ToLowerInvariant();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var computers = await db.Computers.AsNoTracking()
+            .Where(c => c.Name.ToLower().Contains(term) || (c.RemoteIp != null && c.RemoteIp.Contains(term))
+                        || c.LocalIps.Any(ip => ip.ToLower().Contains(term)) || c.Sessions.Any(s => s.UserKey.Contains(term)))
+            .OrderBy(c => c.Name).Take(20)
+            .Select(c => new { c.Id, c.Name, c.RemoteIp, Users = c.Sessions.Select(s => s.UserName).ToList(), c.Online, Revoked = c.RevokedAtUtc != null })
+            .ToListAsync();
+        var current = await db.ComputerSessions.AsNoTracking().Where(s => s.UserKey.Contains(term))
+            .Select(s => new { s.UserName, Computer = s.Computer!.Name }).Take(200).ToListAsync();
+        var historic = await db.UserLogonHistory.AsNoTracking().Where(h => h.UserKey.Contains(term))
+            .Select(h => h.UserName).Distinct().Take(50).ToListAsync();
+        var directoryUsers = await db.DirectoryObjects.AsNoTracking()
+            .Where(d => d.Kind == DirectoryObjectKind.User && !d.Deleted && (d.SamAccountNameLower!.Contains(term) || d.Name.ToLower().Contains(term)))
+            .Select(d => d.SamAccountName ?? d.Name).Take(20).ToListAsync();
+        var users = current.Select(c => c.UserName).Concat(historic).Concat(directoryUsers)
+            .DistinctBy(u => u.ToLowerInvariant()).OrderBy(u => u).Take(30)
+            .Select(u => new UserHit(u, current.Where(c => string.Equals(c.UserName, u, StringComparison.OrdinalIgnoreCase)).Select(c => c.Computer).ToList()))
+            .ToList();
+        var announcements = await db.Announcements.AsNoTracking().Where(a => a.Title.ToLower().Contains(term) || a.BodyMarkdown.ToLower().Contains(term))
+            .OrderByDescending(a => a.StartUtc).Take(20).Select(a => new AnnouncementHit(a.Id, a.Title, a.StartUtc)).ToListAsync();
+        _result = new Result(
+            computers.Select(c => new ComputerHit(c.Id, c.Name, c.RemoteIp, c.Users, c.Revoked ? StatusKind.Revoked : c.Online ? StatusKind.Online : StatusKind.Offline)).ToList(),
+            users, announcements);
+    }
+}

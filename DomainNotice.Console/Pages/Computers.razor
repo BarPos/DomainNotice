@@ -1,0 +1,176 @@
+@page "/computers"
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject NavigationManager Nav
+@inject IComputerAdminService ComputerAdmin
+@inject IAgentUpdateService AgentUpdates
+@inject AnnouncementHandoff Handoff
+@inject ConsoleUser Me
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+
+<PageTitle>Computers · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudText Typo="Typo.h5">Computers</MudText>
+    @if (_awaiting > 0)
+    {
+        <MudButton Href="/computers/awaiting" Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.HowToReg">
+            @_awaiting awaiting approval
+        </MudButton>
+    }
+</div>
+
+<div class="dn-split">
+    <MudPaper Outlined="true" Class="dn-tree pa-2">
+        <MudTreeView T="string" SelectedValue="SelectedNode" SelectedValueChanged="NodeChanged" SelectionMode="SelectionMode.SingleSelection"
+                     Dense="true" Hover="true" Color="Color.Primary">
+            <MudTreeViewItem T="string" Value="@("all")" Text="All" Icon="@Icons.Material.Filled.Devices" />
+            <MudTreeViewItem T="string" Value="@("awaiting")" Text="@($"Awaiting approval ({_awaiting})")" Icon="@Icons.Material.Filled.HowToReg" />
+            <MudTreeViewItem T="string" Value="@("dir")" Text="Directory" Icon="@Icons.Material.Filled.AccountTree" Expanded="true">
+                @OuNodes(null)
+            </MudTreeViewItem>
+            <MudTreeViewItem T="string" Value="@("notindir")" Text="Not in directory" Icon="@Icons.Material.Filled.LinkOff" />
+            <MudTreeViewItem T="string" Value="@("offline7")" Text="Offline more than 7 days" Icon="@Icons.Material.Filled.CloudOff" />
+            <MudTreeViewItem T="string" Value="@("revoked")" Text="Revoked" Icon="@Icons.Material.Filled.Block" />
+        </MudTreeView>
+    </MudPaper>
+
+    <DataGrid @ref="_grid" TRow="ComputerRow" List="ConsoleLists.Computers" Scope="_scope" Cells="_cells"
+              RowHref="@(r => $"/computers/{r.Id}")" ActionBar="_actionBar" ContextMenu="_contextMenu" />
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "node")] public string? Node { get; set; }
+
+    private sealed record OuNode(Guid Id, Guid? ParentGuid, string Name);
+
+    private DataGrid<ComputerRow>? _grid;
+    private List<OuNode> _ous = [];
+    private int _awaiting;
+    private Dictionary<string, string?> _scope = new();
+
+    private string SelectedNode => string.IsNullOrEmpty(Node) ? "all" : Node;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!RendererInfo.IsInteractive) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var containers = await db.DirectoryObjects.AsNoTracking()
+            .Where(d => !d.Deleted && (d.Kind == DirectoryObjectKind.Domain || d.Kind == DirectoryObjectKind.OrganizationalUnit || d.Kind == DirectoryObjectKind.Container))
+            .OrderBy(d => d.Name).Select(d => new OuNode(d.ObjectGuid, d.ParentGuid, d.Name)).ToListAsync();
+        var ids = containers.Select(c => c.Id).ToHashSet();
+        // Anything whose parent is not a synced container is a root.
+        _ous = containers.Select(c => c.ParentGuid is { } p && ids.Contains(p) ? c : c with { ParentGuid = null }).ToList();
+        _awaiting = await db.Computers.CountAsync(c => c.AdLinkState == AdLinkState.AwaitingApproval && c.RevokedAtUtc == null);
+    }
+
+    protected override void OnParametersSet() =>
+        _scope = new Dictionary<string, string?> { [ComputersList.ScopeNode] = SelectedNode == "dir" ? "all" : SelectedNode };
+
+    private RenderFragment OuNodes(Guid? parent) => @<text>
+        @foreach (var ou in _ous.Where(o => o.ParentGuid == parent))
+        {
+            var hasChildren = _ous.Any(o => o.ParentGuid == ou.Id);
+            <MudTreeViewItem T="string" Value="@("ou:" + ou.Id)" Text="@ou.Name" Icon="@Icons.Material.Filled.Folder" Expanded="true">
+                @if (hasChildren)
+                {
+                    @OuNodes(ou.Id)
+                }
+            </MudTreeViewItem>
+        }
+    </text>;
+
+    private void NodeChanged(string? node)
+    {
+        if (node is null || node == SelectedNode) return;
+        Nav.NavigateTo(Nav.GetUriWithQueryParameters(new Dictionary<string, object?> { ["node"] = node == "all" ? null : node, ["page"] = null }));
+    }
+
+    private Dictionary<string, RenderFragment<ComputerRow>> _cells => new()
+    {
+        ["name"] = r => @<span>
+            <MudLink Href="@($"/computers/{r.Id}")" @onclick:stopPropagation="true">@r.Name</MudLink>
+            @if (r.Outdated)
+            {
+                <MudTooltip Text="Agent older than the server"><MudIcon Icon="@Icons.Material.Filled.Upgrade" Size="Size.Small" Color="Color.Warning" Class="ml-1" /></MudTooltip>
+            }
+            @if (r.Replaced)
+            {
+                <MudChip T="string" Size="Size.Small" Class="ml-1">replaced</MudChip>
+            }
+        </span>,
+        ["adLink"] = r => @<span>
+            @switch (r.AdLinkState)
+            {
+                case AdLinkState.Proven: <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">Proven</MudChip>; break;
+                case AdLinkState.MatchedByName: <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">Matched by name</MudChip>; break;
+                case AdLinkState.AwaitingApproval: <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">Awaiting approval</MudChip>; break;
+                case AdLinkState.KeptSeparate: <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">Kept separate</MudChip>; break;
+                default: <span>None</span>; break;
+            }
+        </span>,
+    };
+
+    private RenderFragment<IReadOnlyList<ComputerRow>> _actionBar => rows => @<AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+        <MudButton StartIcon="@Icons.Material.Filled.SystemUpdateAlt" OnClick="@(() => UpdateAgentsAsync(rows))">Update agent</MudButton>
+        <MudButton StartIcon="@Icons.Material.Filled.Campaign" OnClick="@(() => SendAnnouncement(rows))">Send announcement to selected</MudButton>
+        <MudButton StartIcon="@Icons.Material.Filled.Block" OnClick="@(() => RevokeAsync(rows))">Revoke</MudButton>
+        <MudButton StartIcon="@Icons.Material.Filled.Delete" OnClick="@(() => DeleteAsync(rows))">Delete</MudButton>
+    </AuthorizeView>;
+
+    private RenderFragment<ComputerRow> _contextMenu => row => @<text>
+        <MudMenuItem Icon="@Icons.Material.Filled.OpenInNew" Href="@($"/computers/{row.Id}")">Details</MudMenuItem>
+        <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+            <MudMenuItem Icon="@Icons.Material.Filled.SystemUpdateAlt" OnClick="@(() => UpdateAgentsAsync([row]))">Update agent</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Campaign" OnClick="@(() => SendAnnouncement([row]))">Send announcement</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Block" OnClick="@(() => RevokeAsync([row]))" Disabled="row.Revoked">Revoke</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Delete" OnClick="@(() => DeleteAsync([row]))">Delete</MudMenuItem>
+        </AuthorizeView>
+    </text>;
+
+    private async Task UpdateAgentsAsync(IReadOnlyList<ComputerRow> rows)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        var (result, created) = await AgentUpdates.RequestUpdateAsync(rows.Select(r => r.Id).ToList(), actor);
+        if (result.Ok) Snackbar.Add($"{created} update task(s) created. Up-to-date computers and computers with an open task were skipped.", Severity.Success);
+        else Snackbar.Add(result.Error ?? "The update could not be started.", Severity.Error);
+    }
+
+    private void SendAnnouncement(IReadOnlyList<ComputerRow> rows)
+    {
+        Handoff.SetTargets(rows.Select(r => new TargetEdit { Kind = TargetKind.Computer, ComputerId = r.Id, DisplayName = r.Name }));
+        Nav.NavigateTo("/announcements/new?from=selection");
+    }
+
+    private async Task RevokeAsync(IReadOnlyList<ComputerRow> rows)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        var names = string.Join(", ", rows.Take(5).Select(r => r.Name)) + (rows.Count > 5 ? $" and {rows.Count - 5} more" : "");
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Revoke computers",
+                $"Revoke {names}? Their keys are refused from now on; to come back they must enrol again.", "Revoke")) return;
+        await RunEachAsync(rows, r => ComputerAdmin.RevokeAsync(r.Id, actor), "revoked");
+    }
+
+    private async Task DeleteAsync(IReadOnlyList<ComputerRow> rows)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        var names = string.Join(", ", rows.Take(5).Select(r => r.Name)) + (rows.Count > 5 ? $" and {rows.Count - 5} more" : "");
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Delete computers",
+                $"Delete {names} and their history? A computer that is not revoked can enrol again.", "Delete")) return;
+        await RunEachAsync(rows, r => ComputerAdmin.DeleteAsync(r.Id, actor), "deleted");
+    }
+
+    private async Task RunEachAsync(IReadOnlyList<ComputerRow> rows, Func<ComputerRow, Task<OperationResult>> action, string verb)
+    {
+        var ok = 0;
+        foreach (var row in rows)
+        {
+            var result = await action(row);
+            if (result.Ok) ok++;
+            else Snackbar.Add($"{row.Name}: {result.Error}", Severity.Error);
+        }
+        if (ok > 0) Snackbar.Add($"{ok} computer(s) {verb}.", Severity.Success);
+        _grid?.ClearSelection();
+        if (_grid is not null) await _grid.ReloadAsync();
+    }
+}

@@ -1,0 +1,124 @@
+/* DomainNotice Console. Own styles only; MudBlazor provides the components. */
+
+html, body { height: 100%; }
+body { margin: 0; }
+
+/* ---------- navigation (dark in both themes) ---------- */
+.dn-drawer { border-right: 1px solid rgba(255, 255, 255, 0.06); }
+.dn-drawer .mud-nav-link { color: #c9d3df; }
+.dn-drawer .mud-nav-link .mud-nav-link-icon { color: #8fa3b8; }
+.dn-drawer .mud-nav-link.active { background: rgba(77, 148, 255, 0.18); color: #ffffff; border-left: 3px solid #4d94ff; }
+.dn-drawer .mud-nav-link.active .mud-nav-link-icon { color: #ffffff; }
+.dn-nav-badge { margin-left: 6px; }
+.dn-brand { font-weight: 600; letter-spacing: 0.02em; }
+.dn-appbar-search { max-width: 460px; min-width: 220px; }
+.dn-appbar-search .mud-input { background: rgba(255, 255, 255, 0.12); border-radius: 4px; }
+.dn-appbar-search input { color: inherit; }
+
+/* ---------- page pattern: tree left, grid middle ---------- */
+.dn-page-title { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.dn-split { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 960px) { .dn-split { grid-template-columns: minmax(0, 1fr); } }
+.dn-tree { max-height: calc(100vh - 160px); overflow: auto; }
+.dn-tree-item-active { font-weight: 600; }
+
+/* ---------- shared grid ---------- */
+.dn-grid { position: relative; }
+.dn-grid-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; }
+.dn-grid-search { max-width: 320px; }
+.dn-grid-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 0 12px 8px; }
+.dn-grid-editor { padding: 12px; margin: 0 12px 8px; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.dn-grid-editor > * { min-width: 160px; }
+.dn-grid table { width: 100%; }
+.dn-grid th { white-space: nowrap; user-select: none; }
+.dn-grid th.dn-sortable { cursor: pointer; }
+.dn-grid th .dn-th { display: inline-flex; align-items: center; gap: 2px; }
+.dn-grid td { vertical-align: middle; }
+.dn-grid td.dn-check, .dn-grid th.dn-check { width: 44px; padding-left: 4px; padding-right: 0; }
+.dn-grid tr.dn-selected td { background: rgba(77, 148, 255, 0.10); }
+.dn-grid tr.dn-clickable { cursor: pointer; }
+.dn-grid-footer { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: flex-end; padding: 8px 12px; }
+.dn-grid-empty { text-align: center; padding: 24px; opacity: 0.7; }
+.dn-actionbar {
+    position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 8px 12px; background: #1f2a37; color: #fff; border-top: 2px solid #4d94ff;
+}
+.dn-actionbar .mud-button-root { color: #fff; }
+.dn-cell-list { display: flex; flex-direction: column; gap: 0; font-size: 0.85em; }
+.dn-rate { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.dn-rate .mud-progress-linear { flex: 1; }
+
+/* ---------- status dots ---------- */
+.dn-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; }
+.dn-dot-online { background: #2e9e44; box-shadow: 0 0 0 3px rgba(46, 158, 68, 0.18); }
+.dn-dot-offline { background: #9aa3ad; }
+.dn-dot-revoked { background: #d23b3b; box-shadow: 0 0 0 3px rgba(210, 59, 59, 0.18); }
+
+/* ---------- dashboard ---------- */
+.dn-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.dn-tile { padding: 16px; height: 100%; }
+.dn-tile-number { font-size: 2.2rem; font-weight: 600; line-height: 1.1; }
+.dn-tile-wide { grid-column: 1 / -1; }
+
+/* ---------- wizard ---------- */
+.dn-wizard { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 960px) { .dn-wizard { grid-template-columns: minmax(0, 1fr); } }
+.dn-steps { padding: 8px 0; }
+.dn-step { display: flex; align-items: center; gap: 10px; padding: 10px 16px; cursor: pointer; border-left: 3px solid transparent; }
+.dn-step:hover { background: rgba(127, 127, 127, 0.08); }
+.dn-step.dn-step-active { border-left-color: #4d94ff; background: rgba(77, 148, 255, 0.10); font-weight: 600; }
+.dn-step-num { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.8rem; background: rgba(127, 127, 127, 0.25); }
+.dn-step-active .dn-step-num { background: #4d94ff; color: #fff; }
+.dn-content-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 1200px) { .dn-content-split { grid-template-columns: minmax(0, 1fr); } }
+
+/* Preview styled like the agent's announcement window (always the same light window, as on the PC). */
+.dn-agent-window { border: 1px solid #b8c2cc; border-radius: 6px; overflow: hidden; background: #ffffff; color: #1b1f23;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); font-family: "Segoe UI", system-ui, sans-serif; }
+.dn-agent-titlebar { background: #2b3a4a; color: #ffffff; padding: 8px 12px; font-size: 0.9rem; display: flex; justify-content: space-between; }
+.dn-agent-body { padding: 16px 20px; max-height: 420px; overflow: auto; font-size: 0.95rem; line-height: 1.5; }
+.dn-agent-body h1, .dn-agent-body h2, .dn-agent-body h3 { margin: 0.4em 0; }
+.dn-agent-body a { color: #0b5cad; }
+.dn-agent-body pre, .dn-agent-body code { background: #f1f3f5; border-radius: 3px; padding: 0 3px; }
+.dn-agent-questions { padding: 0 20px 8px; }
+.dn-agent-question { margin: 8px 0; }
+.dn-agent-question label { display: block; margin: 2px 0 2px 8px; }
+.dn-agent-buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; background: #f3f5f7; border-top: 1px solid #dde3e9; }
+.dn-agent-button { padding: 6px 18px; border: 1px solid #8a99a8; background: #ffffff; border-radius: 3px; font: inherit; color: #1b1f23; }
+.dn-agent-button-primary { background: #1e6fd9; border-color: #1e6fd9; color: #ffffff; }
+.dn-agent-countdown { font-size: 0.8rem; color: #5b6670; margin-right: auto; align-self: center; }
+
+/* ---------- side-by-side approval ---------- */
+.dn-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 960px) { .dn-compare { grid-template-columns: minmax(0, 1fr); } }
+.dn-kv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 12px; }
+.dn-kv dt { opacity: 0.7; }
+.dn-kv dd { margin: 0; word-break: break-word; }
+.dn-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; word-break: break-all; }
+.dn-markdown img { max-width: 100%; }
+
+/* ---------- account pages (static, no Blazor circuit) ---------- */
+.dn-account { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #18212b;
+    font-family: Roboto, "Segoe UI", system-ui, sans-serif; padding: 16px; box-sizing: border-box; }
+.dn-account-card { width: 100%; max-width: 380px; background: #ffffff; color: #1b1f23; border-radius: 8px; padding: 28px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); box-sizing: border-box; }
+.dn-account-card h1 { font-size: 1.4rem; margin: 0 0 4px; }
+.dn-account-card p.dn-sub { margin: 0 0 20px; color: #5b6670; font-size: 0.9rem; }
+.dn-account-card label { display: block; font-size: 0.85rem; margin: 12px 0 4px; color: #39434d; }
+.dn-account-card input[type=text], .dn-account-card input[type=password] {
+    width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid #b8c2cc; border-radius: 4px; font: inherit; }
+.dn-account-card input:focus { outline: 2px solid #4d94ff; border-color: #4d94ff; }
+.dn-account-choice { display: flex; gap: 0; border: 1px solid #b8c2cc; border-radius: 4px; overflow: hidden; margin-bottom: 4px; }
+.dn-account-choice label { flex: 1; margin: 0; text-align: center; padding: 8px; cursor: pointer; font-size: 0.9rem; }
+.dn-account-choice input { position: absolute; opacity: 0; pointer-events: none; }
+.dn-account-choice input:checked + span { font-weight: 600; color: #1e6fd9; }
+.dn-account-choice label:has(input:checked) { background: #e8f1fd; }
+.dn-account-card button { width: 100%; margin-top: 20px; padding: 10px; border: 0; border-radius: 4px; background: #1e6fd9;
+    color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+.dn-account-card button:hover { background: #1a5fbb; }
+.dn-account-error { background: #fdecec; color: #8a1f1f; border: 1px solid #f3b9b9; border-radius: 4px; padding: 8px 10px; font-size: 0.9rem; margin-bottom: 8px; }
+.dn-account-info { background: #e8f4ea; color: #1f5a2b; border: 1px solid #b6dcbf; border-radius: 4px; padding: 8px 10px; font-size: 0.9rem; margin-bottom: 8px; }
+.dn-account-foot { margin-top: 16px; font-size: 0.8rem; color: #5b6670; text-align: center; }
+.dn-account-foot a { color: #1e6fd9; }
+.dn-grid .mud-simple-table { overflow-x: auto; }

@@ -1,0 +1,76 @@
+@page "/account/login"
+@layout AccountLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@inject IAdminSignInService SignIn
+@* Static form; POST goes to the /account/login endpoint, which sets the cookie. One generic error: no user enumeration. *@
+
+<PageTitle>Sign in · DomainNotice</PageTitle>
+
+<h1>DomainNotice</h1>
+<p class="dn-sub">Sign in to the management console</p>
+
+@if (Error is not null)
+{
+    <div class="dn-account-error" role="alert">Sign-in failed. Check the account type, user name and password.</div>
+}
+@if (Created is not null)
+{
+    <div class="dn-account-info" role="status">The account was created. You can sign in now.</div>
+}
+
+@if (!_domain && !_local)
+{
+    <div class="dn-account-error">No sign-in method is enabled. Configure the directory or enable local accounts.</div>
+}
+else
+{
+    <form method="post" action="/account/login">
+        <AntiforgeryToken />
+        <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+        @if (_domain && _local)
+        {
+            <div class="dn-account-choice" role="radiogroup" aria-label="Account type">
+                <label><input type="radio" name="source" value="domain" checked="@(SelectedSource == "domain")" /><span>Domain account</span></label>
+                <label><input type="radio" name="source" value="local" checked="@(SelectedSource == "local")" /><span>Local account</span></label>
+            </div>
+        }
+        else
+        {
+            <input type="hidden" name="source" value="@(_domain ? "domain" : "local")" />
+            <p class="dn-sub">@(_domain ? "Domain account" : "Local account")</p>
+        }
+        <label for="username">User name</label>
+        <input id="username" name="username" type="text" autocomplete="username" required autofocus maxlength="256"
+               placeholder="@(_domain ? "DOMAIN\\user or user@domain" : "")" />
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" />
+        <button type="submit">Sign in</button>
+    </form>
+}
+
+@if (_setupAllowed)
+{
+    <div class="dn-account-foot">No account yet? <a href="/account/setup">Create the first local account</a></div>
+}
+
+@code {
+    [SupplyParameterFromQuery] public string? Error { get; set; }
+    [SupplyParameterFromQuery] public string? Source { get; set; }
+    [SupplyParameterFromQuery] public string? Created { get; set; }
+    [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
+
+    private bool _domain;
+    private bool _local;
+    private bool _setupAllowed;
+
+    private string SelectedSource => Source == "local" ? "local" : Source == "domain" ? "domain" : _domain ? "domain" : "local";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _domain = SignIn.DomainSignInAvailable;
+        _local = SignIn.LocalSignInEnabled;
+        _setupAllowed = await SignIn.IsFirstRunSetupAllowedAsync();
+        ReturnUrl = Endpoints.ConsoleEndpoints.SafeReturnUrl(ReturnUrl);
+    }
+}

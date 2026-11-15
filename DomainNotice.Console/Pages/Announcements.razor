@@ -1,0 +1,59 @@
+@page "/announcements"
+@inject IAnnouncementService AnnouncementService
+@inject ConsoleUser Me
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject TimeProvider Time
+
+<PageTitle>Announcements · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudText Typo="Typo.h5">Announcements</MudText>
+    <MudSpacer />
+    <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+        <MudButton Href="/announcements/new" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add">New announcement</MudButton>
+    </AuthorizeView>
+</div>
+
+<DataGrid @ref="_grid" TRow="AnnouncementRow" List="ConsoleLists.Announcements" Cells="_cells"
+          RowHref="@(r => $"/announcements/{r.Id}")" ActionBar="_actionBar" ContextMenu="_contextMenu" />
+
+@code {
+    private DataGrid<AnnouncementRow>? _grid;
+
+    private Dictionary<string, RenderFragment<AnnouncementRow>> _cells => new()
+    {
+        ["status"] = r => @<AnnouncementStatusChip Status="@r.StatusAt(Time.GetUtcNow().UtcDateTime)" />,
+        ["title"] = r => @<MudLink Href="@($"/announcements/{r.Id}")" @onclick:stopPropagation="true">@r.Title</MudLink>,
+    };
+
+    private RenderFragment<IReadOnlyList<AnnouncementRow>> _actionBar => rows => @<AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+        <MudButton StartIcon="@Icons.Material.Filled.Delete" OnClick="@(() => DeleteAsync(rows))">Delete</MudButton>
+    </AuthorizeView>;
+
+    private RenderFragment<AnnouncementRow> _contextMenu => row => @<text>
+        <MudMenuItem Icon="@Icons.Material.Filled.BarChart" Href="@($"/announcements/{row.Id}")">Results</MudMenuItem>
+        <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+            <MudMenuItem Icon="@Icons.Material.Filled.Edit" Href="@($"/announcements/{row.Id}/edit")">Edit</MudMenuItem>
+            <MudMenuItem Icon="@Icons.Material.Filled.Delete" OnClick="@(() => DeleteAsync([row]))">Delete</MudMenuItem>
+        </AuthorizeView>
+    </text>;
+
+    private async Task DeleteAsync(IReadOnlyList<AnnouncementRow> rows)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        var names = string.Join(", ", rows.Take(3).Select(r => $"\"{r.Title}\"")) + (rows.Count > 3 ? $" and {rows.Count - 3} more" : "");
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Delete announcements",
+                $"Delete {names} with all deliveries, confirmations and answers? Open windows on the computers are withdrawn.", "Delete")) return;
+        var ok = 0;
+        foreach (var row in rows)
+        {
+            var result = await AnnouncementService.DeleteAsync(row.Id, actor);
+            if (result.Ok) ok++;
+            else Snackbar.Add($"{row.Title}: {result.Error}", Severity.Error);
+        }
+        if (ok > 0) Snackbar.Add($"{ok} announcement(s) deleted.", Severity.Success);
+        _grid?.ClearSelection();
+        if (_grid is not null) await _grid.ReloadAsync();
+    }
+}

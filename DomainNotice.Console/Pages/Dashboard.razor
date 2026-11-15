@@ -1,0 +1,153 @@
+@page "/"
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject TimeProvider Time
+@inject IAgentUpdateService AgentUpdates
+@inject IDirectoryAdmin DirectoryAdmin
+@inject ConsoleUser Me
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject BrowserClock Clock
+@inject ILogger<Dashboard> Logger
+
+<PageTitle>Dashboard · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudText Typo="Typo.h5">Dashboard</MudText>
+    <MudSpacer />
+    <MudIconButton Icon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" aria-label="Reload" />
+</div>
+
+@if (_data is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    <div class="dn-tiles">
+        <MudPaper Outlined="true" Class="dn-tile">
+            <MudText Typo="Typo.subtitle2">Computers</MudText>
+            <div class="d-flex gap-6 mt-2">
+                <div>
+                    <div class="dn-tile-number"><StatusDot Status="StatusKind.Online" /> @_data.Online</div>
+                    <MudLink Href="/computers?f=online:eq:true" Typo="Typo.body2">online</MudLink>
+                </div>
+                <div>
+                    <div class="dn-tile-number"><StatusDot Status="StatusKind.Offline" /> @_data.Offline</div>
+                    <MudLink Href="/computers?f=online:eq:false" Typo="Typo.body2">offline</MudLink>
+                </div>
+            </div>
+        </MudPaper>
+
+        <MudPaper Outlined="true" Class="dn-tile">
+            <MudText Typo="Typo.subtitle2">Outdated agents</MudText>
+            <div class="dn-tile-number mt-2">@_data.Outdated</div>
+            <MudText Typo="Typo.body2">older than the server (@AppVersion.Current)</MudText>
+            <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+                <MudButton Class="mt-3" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.SystemUpdateAlt"
+                           Disabled="@(_data.Outdated == 0 || _busy)" OnClick="UpdateAllAsync">Update all</MudButton>
+            </AuthorizeView>
+        </MudPaper>
+
+        <MudPaper Outlined="true" Class="dn-tile">
+            <MudText Typo="Typo.subtitle2">Awaiting approval</MudText>
+            <div class="dn-tile-number mt-2">@_data.Awaiting</div>
+            <MudLink Href="/computers/awaiting" Typo="Typo.body2">re-imaged or duplicate computers to decide</MudLink>
+        </MudPaper>
+
+        <MudPaper Outlined="true" Class="dn-tile">
+            <MudText Typo="Typo.subtitle2">Directory sync</MudText>
+            @if (_data.Directory is not { Configured: true } dir)
+            {
+                <MudText Class="mt-2">No directory is configured.</MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.h6" Class="mt-2">@(dir.LastSuccessUtc is null ? "Never" : Clock.Format(dir.LastSuccessUtc))</MudText>
+                <MudText Typo="Typo.body2">@(dir.Running ? "Sync running…" : $"{dir.ObjectCount} objects")</MudText>
+                @if (dir.LastError is not null)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Error">Last error: @dir.LastError</MudText>
+                }
+            }
+            <MudLink Href="/directory" Typo="Typo.body2">Directory</MudLink>
+        </MudPaper>
+
+        <MudPaper Outlined="true" Class="dn-tile dn-tile-wide">
+            <div class="d-flex align-center">
+                <MudText Typo="Typo.subtitle2">Active announcements</MudText>
+                <MudSpacer />
+                <MudLink Href="/announcements?f=status:eq:Active" Typo="Typo.body2">All active</MudLink>
+            </div>
+            @if (_data.Active.Count == 0)
+            {
+                <MudText Class="mt-2">No announcement is active right now.</MudText>
+            }
+            @foreach (var a in _data.Active)
+            {
+                var rate = a.Delivered == 0 ? 0 : 100.0 * a.Confirmed / a.Delivered;
+                <div class="mt-3">
+                    <div class="d-flex">
+                        <MudLink Href="@($"/announcements/{a.Id}")">@a.Title</MudLink>
+                        <MudSpacer />
+                        <MudText Typo="Typo.body2">@a.Confirmed of @a.Delivered users confirmed · ends @Clock.Format(a.EndUtc)</MudText>
+                    </div>
+                    <MudProgressLinear Value="rate" Color="Color.Success" Rounded="true" Size="Size.Medium" Class="mt-1" />
+                </div>
+            }
+        </MudPaper>
+    </div>
+}
+
+@code {
+    private sealed record ActiveItem(Guid Id, string Title, DateTime EndUtc, int Delivered, int Confirmed);
+    private sealed record Data(int Online, int Offline, int Outdated, int Awaiting, DirectorySyncStatus? Directory, List<ActiveItem> Active);
+
+    private Data? _data;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (RendererInfo.IsInteractive) await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var now = Time.GetUtcNow().UtcDateTime;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var current = db.Computers.Where(c => c.RevokedAtUtc == null && c.ReplacedByComputerId == null);
+        var online = await current.CountAsync(c => c.Online);
+        var offline = await current.CountAsync(c => !c.Online);
+        var versions = await current.GroupBy(c => c.AgentVersion).Select(g => new { g.Key, Count = g.Count() }).ToListAsync();
+        var outdated = versions.Where(v => AppVersion.IsAgentOutdated(v.Key)).Sum(v => v.Count);
+        var awaiting = await current.CountAsync(c => c.AdLinkState == AdLinkState.AwaitingApproval);
+        var active = await db.Announcements.Where(a => !a.IsDraft && a.StartUtc <= now && a.EndUtc >= now)
+            .OrderBy(a => a.EndUtc)
+            .Select(a => new ActiveItem(a.Id, a.Title, a.EndUtc,
+                db.Deliveries.Where(d => d.AnnouncementId == a.Id).Select(d => d.UserKey).Distinct().Count(),
+                db.Confirmations.Where(c => c.AnnouncementId == a.Id).Select(c => c.UserKey).Distinct().Count()))
+            .Take(20).ToListAsync();
+        DirectorySyncStatus? dir = null;
+        try { dir = await DirectoryAdmin.GetStatusAsync(); }
+        catch (Exception ex) { Logger.LogWarning(ex, "Directory status unavailable"); }
+        _data = new Data(online, offline, outdated, awaiting, dir, active);
+    }
+
+    private async Task UpdateAllAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Update all outdated agents",
+                $"Send the update command to {_data?.Outdated} outdated agents? They update to version {AppVersion.Current}.", "Update all")) return;
+        _busy = true;
+        try
+        {
+            var (result, created) = await AgentUpdates.RequestUpdateAllOutdatedAsync(actor);
+            if (result.Ok) Snackbar.Add($"{created} update task(s) created.", Severity.Success);
+            else Snackbar.Add(result.Error ?? "The update could not be started.", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+        await LoadAsync();
+    }
+}

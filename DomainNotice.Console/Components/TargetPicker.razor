@@ -1,0 +1,269 @@
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IDirectoryAdmin DirectoryAdmin
+@* Targets for an announcement: users, groups, computers and OUs from the synced directory (tree + search), enrolled
+   computers, or typed names when no directory is configured. Targets are stored by objectGUID / ComputerId. *@
+
+<MudText Typo="Typo.subtitle1">Selected targets</MudText>
+@if (Targets.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Dense="true" Class="my-2">No targets: the announcement goes to <b>everyone</b>.</MudAlert>
+}
+else
+{
+    <div class="d-flex flex-wrap gap-1 my-2">
+        @foreach (var t in Targets.ToList())
+        {
+            var label = $"{(string.IsNullOrWhiteSpace(t.DisplayName) ? t.Value : t.DisplayName)} ({KindLabel(t.Kind)})";
+            @if (ReadOnly)
+            {
+                <MudChip T="string" Icon="@KindIcon(t.Kind)" Variant="Variant.Outlined" Color="Color.Primary">@label</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Icon="@KindIcon(t.Kind)" Variant="Variant.Outlined" Color="Color.Primary" OnClose="@(() => Remove(t))">@label</MudChip>
+            }
+        }
+    </div>
+}
+<MudText Typo="Typo.caption">Any matching target is enough. Group membership comes from the synced directory (nested groups count).</MudText>
+
+@if (!ReadOnly)
+{
+    <MudTabs Outlined="true" Class="mt-4" TabPanelsClass="pa-3" @bind-ActivePanelIndex="_tab">
+        @if (_directory)
+        {
+            <MudTabPanel Text="Directory">
+                <div class="dn-split">
+                    <MudPaper Outlined="true" Class="dn-tree pa-2" Style="max-height: 360px">
+                        <MudTreeView T="Guid" SelectedValue="_ou" SelectedValueChanged="OuSelected" SelectionMode="SelectionMode.SingleSelection" Dense="true" Hover="true">
+                            @OuNodes(null)
+                        </MudTreeView>
+                    </MudPaper>
+                    <div>
+                        <MudTextField T="string" Value="_search" ValueChanged="SearchAsync" Placeholder="Search users, groups, computers, OUs"
+                                      DebounceInterval="300" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" />
+                        <MudSimpleTable Dense="true" Hover="true" Class="mt-2">
+                            <tbody>
+                                @if (_results.Count == 0)
+                                {
+                                    <tr><td class="dn-grid-empty">@(_ou == Guid.Empty && string.IsNullOrWhiteSpace(_search) ? "Choose an OU or search." : "Nothing found.")</td></tr>
+                                }
+                                @foreach (var r in _results)
+                                {
+                                    <tr>
+                                        <td><MudIcon Icon="@ObjectIcon(r.Kind)" Size="Size.Small" /></td>
+                                        <td>
+                                            <div>@(r.DisplayName ?? r.Name) @if (r.Sam is not null) { <MudText Typo="Typo.caption" Inline="true">(@r.Sam)</MudText> }</div>
+                                            <MudText Typo="Typo.caption" Class="dn-mono">@r.Dn</MudText>
+                                        </td>
+                                        <td style="text-align:right; white-space:nowrap">
+                                            @switch (r.Kind)
+                                            {
+                                                case DirectoryObjectKind.User:
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.User))">Add user</MudButton>
+                                                    break;
+                                                case DirectoryObjectKind.Computer:
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.Computer))">Add computer</MudButton>
+                                                    break;
+                                                case DirectoryObjectKind.Group:
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.UserGroup))">Add as user group</MudButton>
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.ComputerGroup))">as computer group</MudButton>
+                                                    break;
+                                                default:
+                                                    <MudButton Size="Size.Small" OnClick="@(() => AddDirectory(r, TargetKind.OrganizationalUnit))">Add OU</MudButton>
+                                                    break;
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </MudSimpleTable>
+                    </div>
+                </div>
+            </MudTabPanel>
+        }
+        <MudTabPanel Text="Enrolled computers">
+            <MudTextField T="string" Value="_computerSearch" ValueChanged="SearchComputersAsync" Placeholder="Computer name"
+                          DebounceInterval="300" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" />
+            <MudSimpleTable Dense="true" Hover="true" Class="mt-2">
+                <tbody>
+                    @foreach (var c in _computers)
+                    {
+                        <tr>
+                            <td><StatusDot Status="@(c.Online ? StatusKind.Online : StatusKind.Offline)" /></td>
+                            <td>@c.Name</td>
+                            <td><MudText Typo="Typo.caption">@c.RemoteIp</MudText></td>
+                            <td style="text-align:right">
+                                <MudButton Size="Size.Small" OnClick="@(() => Add(new TargetEdit { Kind = TargetKind.Computer, ComputerId = c.Id, DisplayName = c.Name }))">Add</MudButton>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+        @if (!_directory)
+        {
+            <MudTabPanel Text="Typed name">
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                    No directory is configured. User and computer names are matched as typed; <b>group and OU targets never match</b> until a directory is set up.
+                </MudAlert>
+                <div class="d-flex flex-wrap gap-2 align-end">
+                    <MudSelect T="TargetKind" Label="Kind" @bind-Value="_typedKind" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px">
+                        @foreach (var k in Enum.GetValues<TargetKind>())
+                        {
+                            <MudSelectItem Value="@k">@KindLabel(k)</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudTextField T="string" Label="@(_typedKind == TargetKind.User ? "DOMAIN\\user" : "Name")" @bind-Value="_typedValue"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" />
+                    <MudButton Variant="Variant.Outlined" OnClick="AddTyped" Disabled="@string.IsNullOrWhiteSpace(_typedValue)">Add</MudButton>
+                </div>
+            </MudTabPanel>
+        }
+    </MudTabs>
+}
+
+@code {
+    [Parameter, EditorRequired] public List<TargetEdit> Targets { get; set; } = [];
+    [Parameter] public EventCallback TargetsChanged { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
+
+    private sealed record OuNode(Guid Id, Guid? ParentGuid, string Name);
+    private sealed record DirItem(Guid Guid, DirectoryObjectKind Kind, string Name, string? DisplayName, string? Sam, string Dn);
+    private sealed record ComputerItem(Guid Id, string Name, string? RemoteIp, bool Online);
+
+    private bool _directory;
+    private int _tab;
+    private List<OuNode> _ous = [];
+    private Guid _ou;
+    private string? _search;
+    private List<DirItem> _results = [];
+    private string? _computerSearch;
+    private List<ComputerItem> _computers = [];
+    private TargetKind _typedKind = TargetKind.User;
+    private string? _typedValue;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!RendererInfo.IsInteractive) return;
+        _directory = DirectoryAdmin.IsConfigured;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (_directory)
+        {
+            var containers = await db.DirectoryObjects.AsNoTracking()
+                .Where(d => !d.Deleted && (d.Kind == DirectoryObjectKind.Domain || d.Kind == DirectoryObjectKind.OrganizationalUnit || d.Kind == DirectoryObjectKind.Container))
+                .OrderBy(d => d.Name).Select(d => new OuNode(d.ObjectGuid, d.ParentGuid, d.Name)).ToListAsync();
+            var ids = containers.Select(c => c.Id).ToHashSet();
+            _ous = containers.Select(c => c.ParentGuid is { } p && ids.Contains(p) ? c : c with { ParentGuid = null }).ToList();
+        }
+        await SearchComputersAsync(null);
+    }
+
+    private RenderFragment OuNodes(Guid? parent) => @<text>
+        @foreach (var ou in _ous.Where(o => o.ParentGuid == parent))
+        {
+            <MudTreeViewItem T="Guid" Value="ou.Id" Text="@ou.Name" Icon="@Icons.Material.Filled.Folder">
+                @if (_ous.Any(o => o.ParentGuid == ou.Id))
+                {
+                    @OuNodes(ou.Id)
+                }
+            </MudTreeViewItem>
+        }
+    </text>;
+
+    private async Task OuSelected(Guid ou)
+    {
+        _ou = ou;
+        _search = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var self = await db.DirectoryObjects.AsNoTracking().Where(d => d.ObjectGuid == ou).Select(Project).ToListAsync();
+        var children = await db.DirectoryObjects.AsNoTracking().Where(d => d.ParentGuid == ou && !d.Deleted)
+            .OrderBy(d => d.Kind).ThenBy(d => d.Name).Take(200).Select(Project).ToListAsync();
+        _results = [.. self, .. children];
+    }
+
+    private static readonly System.Linq.Expressions.Expression<Func<DirectoryObject, DirItem>> Project =
+        d => new DirItem(d.ObjectGuid, d.Kind, d.Name, d.DisplayName, d.SamAccountName, d.DistinguishedName);
+
+    private async Task SearchAsync(string? text)
+    {
+        _search = text;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            _results = [];
+            return;
+        }
+        var term = text.Trim().ToLowerInvariant();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _results = await db.DirectoryObjects.AsNoTracking()
+            .Where(d => !d.Deleted && d.Kind != DirectoryObjectKind.Domain && (d.Name.ToLower().Contains(term)
+                || (d.SamAccountNameLower != null && d.SamAccountNameLower.Contains(term))
+                || (d.DisplayName != null && d.DisplayName.ToLower().Contains(term))))
+            .OrderBy(d => d.Kind).ThenBy(d => d.Name).Take(50).Select(Project).ToListAsync();
+    }
+
+    private async Task SearchComputersAsync(string? text)
+    {
+        _computerSearch = text;
+        var term = (text ?? "").Trim().ToLowerInvariant();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _computers = await db.Computers.AsNoTracking()
+            .Where(c => c.RevokedAtUtc == null && c.ReplacedByComputerId == null && (term == "" || c.Name.ToLower().Contains(term)))
+            .OrderBy(c => c.Name).Take(50).Select(c => new ComputerItem(c.Id, c.Name, c.RemoteIp, c.Online)).ToListAsync();
+    }
+
+    private Task AddDirectory(DirItem item, TargetKind kind) =>
+        Add(new TargetEdit { Kind = kind, DirectoryObjectGuid = item.Guid, DisplayName = item.DisplayName ?? item.Name });
+
+    private Task AddTyped()
+    {
+        var value = _typedValue?.Trim();
+        if (string.IsNullOrEmpty(value)) return Task.CompletedTask;
+        _typedValue = null;
+        return Add(new TargetEdit { Kind = _typedKind, Value = value, DisplayName = value });
+    }
+
+    private async Task Add(TargetEdit t)
+    {
+        var exists = Targets.Any(x => x.Kind == t.Kind && x.DirectoryObjectGuid == t.DirectoryObjectGuid && x.ComputerId == t.ComputerId
+                                      && string.Equals(x.Value, t.Value, StringComparison.OrdinalIgnoreCase));
+        if (exists) return;
+        Targets.Add(t);
+        await TargetsChanged.InvokeAsync();
+    }
+
+    private async Task Remove(TargetEdit t)
+    {
+        Targets.Remove(t);
+        await TargetsChanged.InvokeAsync();
+    }
+
+    public static string KindLabel(TargetKind k) => k switch
+    {
+        TargetKind.User => "User",
+        TargetKind.Computer => "Computer",
+        TargetKind.UserGroup => "User group",
+        TargetKind.ComputerGroup => "Computer group",
+        TargetKind.OrganizationalUnit => "OU",
+        _ => k.ToString(),
+    };
+
+    private static string KindIcon(TargetKind k) => k switch
+    {
+        TargetKind.User => Icons.Material.Filled.Person,
+        TargetKind.Computer => Icons.Material.Filled.Computer,
+        TargetKind.UserGroup => Icons.Material.Filled.Groups,
+        TargetKind.ComputerGroup => Icons.Material.Filled.DeviceHub,
+        _ => Icons.Material.Filled.Folder,
+    };
+
+    private static string ObjectIcon(DirectoryObjectKind k) => k switch
+    {
+        DirectoryObjectKind.User => Icons.Material.Filled.Person,
+        DirectoryObjectKind.Computer => Icons.Material.Filled.Computer,
+        DirectoryObjectKind.Group => Icons.Material.Filled.Groups,
+        _ => Icons.Material.Filled.Folder,
+    };
+}

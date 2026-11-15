@@ -1,0 +1,15 @@
+@page "/error"
+@layout AccountLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+
+<PageTitle>Error · DomainNotice</PageTitle>
+
+<h1>Something went wrong</h1>
+<p class="dn-sub">The request could not be completed. The details are in the server log@(RequestId is null ? "" : $" (request {RequestId})").</p>
+<div class="dn-account-foot"><a href="/">Back to the console</a></div>
+
+@code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+    private string? RequestId => System.Diagnostics.Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

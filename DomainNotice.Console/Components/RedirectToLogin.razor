@@ -1,0 +1,22 @@
+@inject NavigationManager Nav
+
+@if (_signedIn)
+{
+    <MudAlert Severity="Severity.Warning" Class="ma-4">You do not have access to this page.</MudAlert>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+    private bool _signedIn;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = AuthState is null ? null : (await AuthState).User;
+        _signedIn = user?.Identity?.IsAuthenticated == true;
+        if (!_signedIn)
+        {
+            var returnUrl = "/" + Nav.ToBaseRelativePath(Nav.Uri);
+            Nav.NavigateTo(ConsoleAuth.LoginPath + "?returnUrl=" + Uri.EscapeDataString(returnUrl), forceLoad: true);
+        }
+    }
+}

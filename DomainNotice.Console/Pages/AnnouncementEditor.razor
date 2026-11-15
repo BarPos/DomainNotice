@@ -1,0 +1,342 @@
+@page "/announcements/new"
+@page "/announcements/{Id:guid}/edit"
+@using System.Globalization
+@implements IDisposable
+@inject IAnnouncementService AnnouncementService
+@inject AnnouncementHandoff Handoff
+@inject NavigationManager Nav
+@inject ConsoleUser Me
+@inject ISnackbar Snackbar
+@inject BrowserClock Clock
+
+<PageTitle>@(Id is null ? "New announcement" : "Edit announcement") · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Href="@(Id is null ? "/announcements" : $"/announcements/{Id}")" aria-label="Back" />
+    <MudText Typo="Typo.h5">@(Id is null ? "New announcement" : "Edit announcement")</MudText>
+</div>
+
+@if (_notFound)
+{
+    <MudAlert Severity="Severity.Warning">This announcement does not exist.</MudAlert>
+}
+else if (_model is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    @if (!_isAdmin)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">Read-only access: you can look at the announcement but not save it.</MudAlert>
+    }
+    <div class="dn-wizard">
+        <MudPaper Outlined="true" Class="dn-steps">
+            @for (var i = 0; i < Steps.Length; i++)
+            {
+                var index = i;
+                <div class="dn-step @(index == _step ? "dn-step-active" : "")" @onclick="@(() => GoTo(index))" role="button" tabindex="0">
+                    <span class="dn-step-num">@(index + 1)</span>
+                    <span>@Steps[index]</span>
+                    @if (StepHasError(index))
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Color="Color.Error" Size="Size.Small" Class="ml-auto" />
+                    }
+                </div>
+            }
+        </MudPaper>
+
+        <MudPaper Outlined="true" Class="pa-4">
+            <MudText Typo="Typo.h6" Class="mb-3">@Steps[_step]</MudText>
+            @switch (_step)
+            {
+                case 0:
+                    <MudStack Spacing="3">
+                        <MudTextField T="string" Label="Title" @bind-Value="_model.Title" Variant="Variant.Outlined" MaxLength="200" Counter="200" Immediate="true" ReadOnly="!_isAdmin" />
+                        <MudSelect T="UnlockMode" Label="When can the buttons be used?" @bind-Value="_model.UnlockMode" Variant="Variant.Outlined" ReadOnly="!_isAdmin">
+                            <MudSelectItem Value="UnlockMode.AfterTime">After the minimum time</MudSelectItem>
+                            <MudSelectItem Value="UnlockMode.AfterRequired">After the required questions are answered</MudSelectItem>
+                            <MudSelectItem Value="UnlockMode.AfterTimeAndRequired">After the minimum time and the required answers</MudSelectItem>
+                        </MudSelect>
+                        <MudNumericField T="int" Label="Minimum seconds before the buttons unlock" @bind-Value="_model.MinDismissSeconds" Min="0" Max="3600" Variant="Variant.Outlined" ReadOnly="!_isAdmin" />
+                        <MudSwitch T="bool" @bind-Value="_model.AnonymousAnswers" Color="Color.Primary" Label="Anonymous answers" ReadOnly="!_isAdmin" />
+                        <MudText Typo="Typo.caption">
+                            With anonymous answers, who confirmed is still recorded, but the answers are stored without any link to the person,
+                            computer or time, and can only be filtered by announcement, question and option.
+                        </MudText>
+                        <MudSwitch T="bool" @bind-Value="_model.IsDraft" Color="Color.Primary" Label="Draft (never delivered)" ReadOnly="!_isAdmin" />
+                    </MudStack>
+                    break;
+
+                case 1:
+                    <div class="dn-content-split">
+                        <div>
+                            <MudTextField T="string" Label="Message (Markdown)" Value="_model.BodyMarkdown" ValueChanged="BodyChanged" Lines="20"
+                                          Variant="Variant.Outlined" Immediate="true" DebounceInterval="300" ReadOnly="!_isAdmin" Class="dn-mono" />
+                            <MudText Typo="Typo.caption">Markdown: **bold**, *italic*, lists, links, headings. Raw HTML is not allowed.</MudText>
+                        </div>
+                        <div>
+                            <MudText Typo="Typo.subtitle2" Class="mb-2">Preview of the agent window</MudText>
+                            <AgentWindowPreview Title="@_model.Title" Html="@_previewHtml" Buttons="@_model.Buttons.Select(b => b.Label).ToList()"
+                                                Questions="_model.Questions" MinSeconds="_model.MinDismissSeconds" UnlockMode="_model.UnlockMode" />
+                        </div>
+                    </div>
+                    break;
+
+                case 2:
+                    <MudText Typo="Typo.subtitle1">Buttons</MudText>
+                    <MudText Typo="Typo.caption" Class="mb-2">The first button is the default. Existing buttons keep their identity when renamed.</MudText>
+                    @for (var i = 0; i < _model.Buttons.Count; i++)
+                    {
+                        var b = _model.Buttons[i];
+                        var index = i;
+                        <div class="d-flex align-center gap-2 mb-2">
+                            <MudTextField T="string" Label="@($"Button {index + 1}")" @bind-Value="b.Label" Variant="Variant.Outlined" Margin="Margin.Dense" MaxLength="100" Immediate="true" ReadOnly="!_isAdmin" />
+                            @if (_isAdmin)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Disabled="@(index == 0)" OnClick="@(() => Move(_model.Buttons, index, -1))" aria-label="Move up" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Disabled="@(_model.Buttons.Count <= 1)" OnClick="@(() => _model.Buttons.RemoveAt(index))" aria-label="Remove button" />
+                            }
+                        </div>
+                    }
+                    @if (_isAdmin)
+                    {
+                        <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => _model.Buttons.Add(new ButtonEdit { Label = "" }))">Add button</MudButton>
+                    }
+
+                    <MudDivider Class="my-4" />
+                    <MudText Typo="Typo.subtitle1">Questions</MudText>
+                    <MudText Typo="Typo.caption" Class="mb-2">A question that already has answers cannot be deleted, only hidden.</MudText>
+                    @for (var i = 0; i < _model.Questions.Count; i++)
+                    {
+                        var q = _model.Questions[i];
+                        var qIndex = i;
+                        <MudPaper Outlined="true" Class="pa-3 mb-3">
+                            <div class="d-flex align-center gap-2">
+                                <MudTextField T="string" Label="@($"Question {qIndex + 1}")" @bind-Value="q.Prompt" Variant="Variant.Outlined" Margin="Margin.Dense" MaxLength="1000" Immediate="true" ReadOnly="!_isAdmin" />
+                                <MudSelect T="QuestionKind" Label="Kind" @bind-Value="q.Kind" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 180px" ReadOnly="@(!_isAdmin || q.HasAnswers)">
+                                    <MudSelectItem Value="QuestionKind.Single">Single choice</MudSelectItem>
+                                    <MudSelectItem Value="QuestionKind.Multiple">Multiple choice</MudSelectItem>
+                                </MudSelect>
+                            </div>
+                            <div class="d-flex flex-wrap align-center gap-4 mt-1">
+                                <MudSwitch T="bool" @bind-Value="q.Required" Label="Required" Color="Color.Primary" ReadOnly="!_isAdmin" />
+                                <MudSwitch T="bool" @bind-Value="q.Hidden" Label="Hidden" Color="Color.Warning" ReadOnly="!_isAdmin" />
+                                @if (q.HasAnswers)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Info">has answers</MudChip>
+                                }
+                                <MudSpacer />
+                                @if (_isAdmin)
+                                {
+                                    <MudTooltip Text="@(q.HasAnswers ? "Answered questions can only be hidden" : "Delete question")">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Disabled="q.HasAnswers" OnClick="@(() => _model.Questions.RemoveAt(qIndex))" aria-label="Delete question" />
+                                    </MudTooltip>
+                                }
+                            </div>
+                            <MudText Typo="Typo.caption" Class="mt-2">Options</MudText>
+                            @for (var j = 0; j < q.Options.Count; j++)
+                            {
+                                var o = q.Options[j];
+                                var oIndex = j;
+                                <div class="d-flex align-center gap-2 ml-4">
+                                    <MudTextField T="string" @bind-Value="o.Label" Placeholder="@($"Option {oIndex + 1}")" Variant="Variant.Text" Margin="Margin.Dense" MaxLength="500" Immediate="true" ReadOnly="!_isAdmin" />
+                                    @if (_isAdmin)
+                                    {
+                                        <MudTooltip Text="@(q.HasAnswers && o.Id is not null ? "Options of an answered question cannot be removed" : "Remove option")">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" Disabled="@(q.HasAnswers && o.Id is not null)"
+                                                           OnClick="@(() => q.Options.RemoveAt(oIndex))" aria-label="Remove option" />
+                                        </MudTooltip>
+                                    }
+                                </div>
+                            }
+                            @if (_isAdmin)
+                            {
+                                <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Add" Class="ml-4" OnClick="@(() => q.Options.Add(new OptionEdit()))">Add option</MudButton>
+                            }
+                        </MudPaper>
+                    }
+                    @if (_isAdmin)
+                    {
+                        <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddQuestion">Add question</MudButton>
+                    }
+                    break;
+
+                case 3:
+                    <TargetPicker Targets="_model.Targets" ReadOnly="!_isAdmin" TargetsChanged="StateHasChanged" />
+                    break;
+
+                case 4:
+                    <MudText Typo="Typo.body2" Class="mb-3">Times are in your browser's time zone (<b>@Clock.ZoneLabel</b>) and stored as UTC.</MudText>
+                    <MudStack Spacing="3">
+                        <MudTextField T="string" Label="Start" Value="@ToLocalInput(_model.StartUtc)" ValueChanged="@(v => SetTime(v, true))" InputType="InputType.DateTimeLocal"
+                                      Variant="Variant.Outlined" ReadOnly="!_isAdmin" HelperText="@($"UTC {_model.StartUtc:yyyy-MM-dd HH:mm}")" />
+                        <MudTextField T="string" Label="End" Value="@ToLocalInput(_model.EndUtc)" ValueChanged="@(v => SetTime(v, false))" InputType="InputType.DateTimeLocal"
+                                      Variant="Variant.Outlined" ReadOnly="!_isAdmin" HelperText="@($"UTC {_model.EndUtc:yyyy-MM-dd HH:mm}")" />
+                        <MudNumericField T="int" Label="Times shown per user" @bind-Value="_model.MaxDisplays" Min="1" Max="1000" Variant="Variant.Outlined" ReadOnly="!_isAdmin"
+                                         HelperText="Counted per user across all computers." />
+                        <MudNumericField T="int" Label="Repeat interval (minutes)" @bind-Value="_model.RepeatIntervalMinutes" Min="0" Max="525600" Variant="Variant.Outlined" ReadOnly="!_isAdmin"
+                                         HelperText="Time between showings when shown more than once; 0 = at the next opportunity." />
+                    </MudStack>
+                    break;
+
+                default:
+                    var errors = AnnouncementService.Validate(_model);
+                    @if (errors.Count > 0)
+                    {
+                        <MudAlert Severity="Severity.Error" Class="mb-3">
+                            <ul class="ma-0">
+                                @foreach (var e in errors) { <li>@e</li> }
+                            </ul>
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">Ready to save.</MudAlert>
+                    }
+                    <dl class="dn-kv">
+                        <dt>Title</dt><dd>@_model.Title</dd>
+                        <dt>Status</dt><dd>@(_model.IsDraft ? "Draft (not delivered)" : "Will be delivered in the time window")</dd>
+                        <dt>Window</dt><dd>@Clock.Format(_model.StartUtc) – @Clock.Format(_model.EndUtc)</dd>
+                        <dt>Buttons</dt><dd>@string.Join(", ", _model.Buttons.Select(b => b.Label))</dd>
+                        <dt>Questions</dt><dd>@_model.Questions.Count(q => !q.Hidden) visible, @_model.Questions.Count(q => q.Hidden) hidden</dd>
+                        <dt>Answers</dt><dd>@(_model.AnonymousAnswers ? "Anonymous" : "Named")</dd>
+                        <dt>Targets</dt><dd>@(_model.Targets.Count == 0 ? "Everyone" : string.Join(", ", _model.Targets.Select(t => $"{t.DisplayName} ({TargetPicker.KindLabel(t.Kind)})")))</dd>
+                        <dt>Shown</dt><dd>@_model.MaxDisplays time(s) per user@(_model.RepeatIntervalMinutes > 0 ? $", every {_model.RepeatIntervalMinutes} min" : "")</dd>
+                    </dl>
+                    break;
+            }
+
+            <MudDivider Class="my-4" />
+            <div class="d-flex gap-2">
+                <MudButton Variant="Variant.Text" Disabled="@(_step == 0)" OnClick="@(() => GoTo(_step - 1))" StartIcon="@Icons.Material.Filled.ChevronLeft">Back</MudButton>
+                @if (_step < Steps.Length - 1)
+                {
+                    <MudButton Variant="Variant.Outlined" OnClick="@(() => GoTo(_step + 1))" EndIcon="@Icons.Material.Filled.ChevronRight">Next</MudButton>
+                }
+                <MudSpacer />
+                @if (_isAdmin)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" Disabled="_saving" OnClick="SaveAsync">
+                        @(_model.IsDraft ? "Save draft" : "Save")
+                    </MudButton>
+                }
+            </div>
+        </MudPaper>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid? Id { get; set; }
+    [SupplyParameterFromQuery(Name = "from")] public string? From { get; set; }
+
+    private static readonly string[] Steps = ["Basic", "Content", "Buttons and questions", "Targets", "Schedule", "Summary"];
+
+    private AnnouncementEditModel? _model;
+    private bool _notFound;
+    private bool _isAdmin;
+    private bool _saving;
+    private int _step;
+    private string _previewHtml = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Clock.Changed += OnClockChanged;
+        if (!RendererInfo.IsInteractive) return;
+        _isAdmin = await Me.IsAdminAsync();
+        _model = await AnnouncementService.GetForEditAsync(Id);
+        if (_model is null)
+        {
+            _notFound = true;
+            return;
+        }
+        if (Id is null && From == "selection" && Handoff.Take() is { Count: > 0 } targets)
+        {
+            // P7: "Send announcement to selected" from the Computers grid.
+            _model.Targets = targets;
+            _step = 0;
+            Snackbar.Add($"{targets.Count} computer target(s) added from your selection.", Severity.Info);
+        }
+        RenderPreview();
+    }
+
+    private void OnClockChanged() => InvokeAsync(StateHasChanged);
+
+    private void BodyChanged(string? text)
+    {
+        if (_model is null) return;
+        _model.BodyMarkdown = text ?? "";
+        RenderPreview();
+    }
+
+    private void RenderPreview() => _previewHtml = AnnouncementService.RenderPreviewHtml(_model?.BodyMarkdown ?? "");
+
+    private void GoTo(int step)
+    {
+        _step = Math.Clamp(step, 0, Steps.Length - 1);
+        if (_step == 1) RenderPreview();
+    }
+
+    private bool StepHasError(int step)
+    {
+        if (_model is null) return false;
+        return step switch
+        {
+            0 => string.IsNullOrWhiteSpace(_model.Title),
+            2 => _model.Buttons.Count == 0 || _model.Buttons.Any(b => string.IsNullOrWhiteSpace(b.Label))
+                 || _model.Questions.Any(q => !q.Hidden && (string.IsNullOrWhiteSpace(q.Prompt) || q.Options.Count < 2 || q.Options.Any(o => string.IsNullOrWhiteSpace(o.Label)))),
+            4 => _model.EndUtc <= _model.StartUtc,
+            _ => false,
+        };
+    }
+
+    private static void Move<T>(List<T> list, int index, int delta)
+    {
+        var target = index + delta;
+        if (target < 0 || target >= list.Count) return;
+        (list[index], list[target]) = (list[target], list[index]);
+    }
+
+    private void AddQuestion() =>
+        _model?.Questions.Add(new QuestionEdit { Kind = QuestionKind.Single, Options = [new OptionEdit(), new OptionEdit()] });
+
+    private string ToLocalInput(DateTime utc) => Clock.ToLocal(utc).ToString("yyyy-MM-ddTHH:mm", CultureInfo.InvariantCulture);
+
+    private void SetTime(string? value, bool start)
+    {
+        if (_model is null || string.IsNullOrWhiteSpace(value)) return;
+        if (!DateTime.TryParseExact(value, ["yyyy-MM-ddTHH:mm", "yyyy-MM-ddTHH:mm:ss"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var local)) return;
+        var utc = Clock.ToUtc(local);
+        if (start) _model.StartUtc = utc;
+        else _model.EndUtc = utc;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_model is null || await Me.RequireAdminAsync() is not { } actor) return;
+        var errors = AnnouncementService.Validate(_model);
+        if (errors.Count > 0)
+        {
+            _step = Steps.Length - 1;
+            Snackbar.Add("Fix the problems listed in the summary first.", Severity.Warning);
+            return;
+        }
+        _saving = true;
+        try
+        {
+            var (result, id) = await AnnouncementService.SaveAsync(_model, actor);
+            if (result.Ok && id is { } saved)
+            {
+                Snackbar.Add("Announcement saved.", Severity.Success);
+                Nav.NavigateTo($"/announcements/{saved}");
+            }
+            else Snackbar.Add(result.Error ?? "The announcement could not be saved.", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    public void Dispose() => Clock.Changed -= OnClockChanged;
+}

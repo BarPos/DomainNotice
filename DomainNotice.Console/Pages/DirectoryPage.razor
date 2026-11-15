@@ -1,0 +1,171 @@
+@page "/directory"
+@using Microsoft.Extensions.Options
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IDirectoryAdmin DirectoryAdmin
+@inject IOptions<DomainNotice.Server.Options.DirectoryOptions> DirectoryOptions
+@inject NavigationManager Nav
+@inject ConsoleUser Me
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject BrowserClock Clock
+
+<PageTitle>Directory · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudText Typo="Typo.h5">Directory</MudText>
+    <MudSpacer />
+    <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Sync" Disabled="@(!DirectoryAdmin.IsConfigured || _busy)" OnClick="@(() => SyncAsync(false))">Sync now</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.SyncAlt" Disabled="@(!DirectoryAdmin.IsConfigured || _busy)" OnClick="@(() => SyncAsync(true))">Full sync</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.NetworkCheck" Disabled="@(!DirectoryAdmin.IsConfigured || _busy)" OnClick="TestAsync">Test connection</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Key" Disabled="@(!DirectoryAdmin.IsConfigured)" OnClick="SetPasswordAsync">Set bind password</MudButton>
+    </AuthorizeView>
+</div>
+
+<MudPaper Outlined="true" Class="pa-4 mb-4">
+    @if (!DirectoryAdmin.IsConfigured)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true">
+            No directory is configured (Directory:Hosts and Directory:BaseDn in the config file). Sign-in uses local accounts, and
+            announcements can target typed user and computer names only.
+        </MudAlert>
+    }
+    else if (_status is null)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else
+    {
+        var o = DirectoryOptions.Value;
+        <div class="d-flex flex-wrap gap-8">
+            <div><MudText Typo="Typo.caption">Domain controllers</MudText><MudText>@string.Join(", ", o.Hosts) (port @o.Port, @o.Security)</MudText></div>
+            <div><MudText Typo="Typo.caption">Base DN</MudText><MudText Class="dn-mono">@o.BaseDn</MudText></div>
+            <div><MudText Typo="Typo.caption">Bind password from</MudText><MudText>@o.BindPasswordSource</MudText></div>
+            <div><MudText Typo="Typo.caption">Last successful sync</MudText><MudText>@(_status.LastSuccessUtc is null ? "Never" : Clock.Format(_status.LastSuccessUtc))</MudText></div>
+            <div><MudText Typo="Typo.caption">Last attempt</MudText><MudText>@Clock.Format(_status.LastAttemptUtc)</MudText></div>
+            <div><MudText Typo="Typo.caption">Objects</MudText><MudText>@_status.ObjectCount</MudText></div>
+            <div><MudText Typo="Typo.caption">State</MudText><MudText>@(_status.Running ? "Sync running…" : "Idle")</MudText></div>
+        </div>
+        @if (_status.LastError is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">Last error: @_status.LastError</MudAlert>
+        }
+    }
+</MudPaper>
+
+<div class="dn-split">
+    <MudPaper Outlined="true" Class="dn-tree pa-2">
+        @if (_ous.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="pa-2">Nothing synced yet.</MudText>
+        }
+        <MudTreeView T="string" SelectedValue="@(Parent ?? "")" SelectedValueChanged="ParentChanged" SelectionMode="SelectionMode.SingleSelection" Dense="true" Hover="true">
+            @OuNodes(null)
+        </MudTreeView>
+    </MudPaper>
+    <DataGrid TRow="DirectoryObjectRow" List="ConsoleLists.DirectoryObjects" Scope="_scope" Cells="_cells" />
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "parent")] public string? Parent { get; set; }
+
+    private sealed record OuNode(Guid Id, Guid? ParentGuid, string Name);
+
+    private DirectorySyncStatus? _status;
+    private List<OuNode> _ous = [];
+    private bool _busy;
+    private Dictionary<string, string?> _scope = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!RendererInfo.IsInteractive) return;
+        await LoadAsync();
+    }
+
+    protected override void OnParametersSet() => _scope = new Dictionary<string, string?> { ["parent"] = Parent };
+
+    private async Task LoadAsync()
+    {
+        if (DirectoryAdmin.IsConfigured) _status = await DirectoryAdmin.GetStatusAsync();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var containers = await db.DirectoryObjects.AsNoTracking()
+            .Where(d => !d.Deleted && (d.Kind == DirectoryObjectKind.Domain || d.Kind == DirectoryObjectKind.OrganizationalUnit || d.Kind == DirectoryObjectKind.Container))
+            .OrderBy(d => d.Name).Select(d => new OuNode(d.ObjectGuid, d.ParentGuid, d.Name)).ToListAsync();
+        var ids = containers.Select(c => c.Id).ToHashSet();
+        _ous = containers.Select(c => c.ParentGuid is { } p && ids.Contains(p) ? c : c with { ParentGuid = null }).ToList();
+    }
+
+    private RenderFragment OuNodes(Guid? parent) => @<text>
+        @foreach (var ou in _ous.Where(o => o.ParentGuid == parent))
+        {
+            <MudTreeViewItem T="string" Value="@ou.Id.ToString()" Text="@ou.Name" Icon="@Icons.Material.Filled.Folder" Expanded="@(parent is null)">
+                @if (_ous.Any(o => o.ParentGuid == ou.Id))
+                {
+                    @OuNodes(ou.Id)
+                }
+            </MudTreeViewItem>
+        }
+    </text>;
+
+    private void ParentChanged(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || value == Parent) return;
+        Nav.NavigateTo(Nav.GetUriWithQueryParameters(new Dictionary<string, object?> { ["parent"] = value, ["page"] = null }));
+    }
+
+    private Dictionary<string, RenderFragment<DirectoryObjectRow>> _cells => new()
+    {
+        ["agent"] = r => @<span>
+            @if (r.Kind == DirectoryObjectKind.Computer)
+            {
+                @if (r.EnrolledComputerId is { } id) { <MudLink Href="@($"/computers/{id}")">Enrolled</MudLink> }
+                else { <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">No agent</MudChip> }
+            }
+        </span>,
+    };
+
+    private async Task SyncAsync(bool full)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        _busy = true;
+        try
+        {
+            await DirectoryAdmin.RequestSyncAsync(full, actor);
+            Snackbar.Add(full ? "Full sync requested." : "Incremental sync requested.", Severity.Info);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TestAsync()
+    {
+        if (await Me.RequireAdminAsync() is null) return;
+        _busy = true;
+        try
+        {
+            var result = await DirectoryAdmin.TestConnectionAsync();
+            Snackbar.Add(result.Ok ? "The service account could bind to the directory." : $"Connection failed: {result.Error}",
+                result.Ok ? Severity.Success : Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SetPasswordAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        var note = DirectoryOptions.Value.BindPasswordSource == "Database"
+            ? "It is stored encrypted in the database."
+            : $"Note: Directory:BindPasswordSource is \"{DirectoryOptions.Value.BindPasswordSource}\"; set it to \"Database\" for this password to be used.";
+        var password = await PromptDialog.AskAsync(Dialogs, "Set bind password", "Bind password", "Save", secret: true, confirm: true,
+            message: $"Password of the bind account {DirectoryOptions.Value.BindUser}. {note}");
+        if (password is null) return;
+        var result = await DirectoryAdmin.SetBindPasswordAsync(password, actor);
+        Snackbar.Add(result.Ok ? "Bind password saved." : result.Error ?? "Failed.", result.Ok ? Severity.Success : Severity.Error);
+    }
+}

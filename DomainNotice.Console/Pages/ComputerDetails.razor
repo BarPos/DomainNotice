@@ -1,0 +1,170 @@
+@page "/computers/{Id:guid}"
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject NavigationManager Nav
+@inject IComputerAdminService ComputerAdmin
+@inject IAgentUpdateService AgentUpdates
+@inject AnnouncementHandoff Handoff
+@inject ConsoleUser Me
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject BrowserClock Clock
+
+<PageTitle>@(_computer?.Name ?? "Computer") · DomainNotice</PageTitle>
+
+@if (_loaded && _computer is null)
+{
+    <MudAlert Severity="Severity.Warning">This computer does not exist (it may have been deleted). <MudLink Href="/computers">Back to computers</MudLink></MudAlert>
+}
+else if (_computer is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    var c = _computer;
+    <div class="dn-page-title">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Href="/computers" aria-label="Back to computers" />
+        <StatusDot Status="@(c.IsRevoked ? StatusKind.Revoked : c.Online ? StatusKind.Online : StatusKind.Offline)" ShowLabel="true" />
+        <MudText Typo="Typo.h5">@c.Name</MudText>
+        @if (c.IsReplaced)
+        {
+            <MudChip T="string" Size="Size.Small">Replaced by <MudLink Href="@($"/computers/{c.ReplacedByComputerId}")" Class="ml-1">newer record</MudLink></MudChip>
+        }
+        <MudSpacer />
+        <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+            <MudButton StartIcon="@Icons.Material.Filled.SystemUpdateAlt" Variant="Variant.Outlined" Disabled="@(!AppVersion.IsAgentOutdated(c.AgentVersion))" OnClick="UpdateAsync">Update agent</MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.Campaign" Variant="Variant.Outlined" OnClick="SendAnnouncement">Send announcement</MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.Block" Variant="Variant.Outlined" Color="Color.Error" Disabled="c.IsRevoked" OnClick="RevokeAsync">Revoke</MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.Delete" Variant="Variant.Outlined" Color="Color.Error" OnClick="DeleteAsync">Delete</MudButton>
+        </AuthorizeView>
+    </div>
+
+    @if (_chain.Count > 1)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">History includes @(_chain.Count - 1) replaced record(s) of this machine.</MudAlert>
+    }
+
+    <MudTabs Outlined="true" Rounded="true" ActivePanelIndex="Tab" ActivePanelIndexChanged="TabChanged" KeepPanelsAlive="false" TabPanelsClass="pa-4">
+        <MudTabPanel Text="Overview">
+            <dl class="dn-kv">
+                <dt>Name</dt><dd>@c.Name</dd>
+                <dt>DNS name</dt><dd>@c.DnsName</dd>
+                <dt>Remote IP</dt><dd>@c.RemoteIp</dd>
+                <dt>Local IPs</dt><dd>@string.Join(", ", c.LocalIps)</dd>
+                <dt>Current users</dt>
+                <dd>
+                    @if (c.Sessions.Count == 0) { <span>None</span> }
+                    @foreach (var s in c.Sessions.OrderBy(s => s.UserName))
+                    {
+                        <div>@s.UserName <MudText Typo="Typo.caption" Inline="true">(@s.State, since @Clock.Format(s.LogonAtUtc))</MudText></div>
+                    }
+                </dd>
+                <dt>Agent version</dt>
+                <dd>@c.AgentVersion @if (AppVersion.IsAgentOutdated(c.AgentVersion)) { <MudChip T="string" Size="Size.Small" Color="Color.Warning">outdated</MudChip> }</dd>
+                <dt>OS</dt><dd>@c.OsVersion</dd>
+                <dt>Last seen</dt><dd>@Clock.Format(c.LastSeenAtUtc)</dd>
+                <dt>Enrolled</dt><dd>@Clock.Format(c.EnrolledAtUtc)</dd>
+                <dt>AD link</dt>
+                <dd>
+                    @GridField.Humanize(c.AdLinkState.ToString())
+                    @if (_adDn is not null) { <div class="dn-mono">@_adDn</div> }
+                    @if (c.AdLinkedAtUtc is not null) { <MudText Typo="Typo.caption">linked @Clock.Format(c.AdLinkedAtUtc)</MudText> }
+                    @if (c.AdLinkState == AdLinkState.AwaitingApproval) { <div><MudLink Href="/computers/awaiting">Decide in Awaiting approval</MudLink></div> }
+                </dd>
+                <dt>Key fingerprint</dt><dd class="dn-mono">@KeyFingerprint.Display(c.AgentKeyFingerprint)</dd>
+                @if (c.IsRevoked)
+                {
+                    <dt>Revoked</dt><dd>@Clock.Format(c.RevokedAtUtc) by @c.RevokedBy</dd>
+                }
+            </dl>
+        </MudTabPanel>
+        <MudTabPanel Text="Name history">
+            <DataGrid TRow="NameHistoryRow" List="ConsoleLists.NameHistory" Prefix="n." Scope="_scope" />
+        </MudTabPanel>
+        <MudTabPanel Text="User history">
+            <DataGrid TRow="UserHistoryRow" List="ConsoleLists.UserHistory" Prefix="u." Scope="_scope" />
+        </MudTabPanel>
+        <MudTabPanel Text="IP history">
+            <DataGrid TRow="IpHistoryRow" List="ConsoleLists.IpHistory" Prefix="i." Scope="_scope" />
+        </MudTabPanel>
+        <MudTabPanel Text="Announcements">
+            <MudText Typo="Typo.subtitle1" Class="mb-2">Deliveries</MudText>
+            <DataGrid TRow="DeliveryRow" List="ConsoleLists.Deliveries" Prefix="d." Scope="_scope"
+                      RowHref="@(r => $"/announcements/{r.AnnouncementId}")" />
+            <MudText Typo="Typo.subtitle1" Class="mt-6 mb-2">Confirmations</MudText>
+            <DataGrid TRow="ConfirmationRow" List="ConsoleLists.Confirmations" Prefix="c." Scope="_scope"
+                      RowHref="@(r => $"/announcements/{r.AnnouncementId}")" />
+        </MudTabPanel>
+    </MudTabs>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    [SupplyParameterFromQuery(Name = "tab")] public int? TabParam { get; set; }
+
+    private Computer? _computer;
+    private string? _adDn;
+    private bool _loaded;
+    private IReadOnlyList<Guid> _chain = [];
+    private Dictionary<string, string?> _scope = new();
+
+    private int Tab => Math.Clamp(TabParam ?? 0, 0, 4);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _scope = new Dictionary<string, string?> { ["computer"] = Id.ToString() };
+        if (!RendererInfo.IsInteractive || _computer?.Id == Id) return;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _computer = await db.Computers.AsNoTracking().Include(c => c.Sessions).FirstOrDefaultAsync(c => c.Id == Id);
+        _adDn = _computer?.DirectoryObjectGuid is { } g
+            ? await db.DirectoryObjects.Where(d => d.ObjectGuid == g).Select(d => d.DistinguishedName).FirstOrDefaultAsync()
+            : null;
+        _chain = _computer is null ? [] : await ComputerAdmin.GetHistoryChainAsync(Id);
+        _loaded = true;
+    }
+
+    private void TabChanged(int index) =>
+        Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", index == 0 ? null : index), replace: true);
+
+    private async Task UpdateAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        var (result, created) = await AgentUpdates.RequestUpdateAsync([Id], actor);
+        Snackbar.Add(result.Ok ? (created > 0 ? "Update task created." : "No task created (up to date or a task is already open).") : result.Error ?? "Failed.",
+            result.Ok ? Severity.Success : Severity.Error);
+    }
+
+    private void SendAnnouncement()
+    {
+        if (_computer is null) return;
+        Handoff.SetTargets([new TargetEdit { Kind = TargetKind.Computer, ComputerId = _computer.Id, DisplayName = _computer.Name }]);
+        Nav.NavigateTo("/announcements/new?from=selection");
+    }
+
+    private async Task RevokeAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Revoke computer", $"Revoke {_computer?.Name}? Its key is refused from now on.", "Revoke")) return;
+        var result = await ComputerAdmin.RevokeAsync(Id, actor);
+        Snackbar.Add(result.Ok ? "Computer revoked." : result.Error ?? "Failed.", result.Ok ? Severity.Success : Severity.Error);
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Delete computer", $"Delete {_computer?.Name} and its history?", "Delete")) return;
+        var result = await ComputerAdmin.DeleteAsync(Id, actor);
+        if (result.Ok)
+        {
+            Snackbar.Add("Computer deleted.", Severity.Success);
+            Nav.NavigateTo("/computers");
+        }
+        else Snackbar.Add(result.Error ?? "Failed.", Severity.Error);
+    }
+}
