@@ -43,7 +43,7 @@ account only while no directory is configured and no local account exists; other
 | **History** | Name, user and IP history across all computers |
 | **Agent updates** | Update tasks and their state |
 | **Directory** | Synced AD tree, sync status, **Sync now**, bind password, test connection; shows AD computers without an agent |
-| **Settings** | Enrolment (install password, requirement, awaiting-approval policy), Agent install (fingerprint, `msiexec` line, MSI download/upload), History (retention), Local accounts, About and updates |
+| **Settings** | Enrolment (install password, requirement, awaiting-approval policy), Agent install (fingerprint, `msiexec` line, MSI download/upload), History (retention), Local accounts, **Announcement window** (text to the right of the title, with a preview), About and updates |
 | **Audit log** | Who created, edited or deleted announcements, revoked computers, changed settings, signed in |
 
 ## Grids, search and filters

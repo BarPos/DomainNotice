@@ -22,6 +22,8 @@ public static class SettingKeys
     public const string DirectoryBindPassword = "Directory.BindPassword";
     /// <summary>Highest uSNChanged seen, per DC: key prefix + host.</summary>
     public const string DirectoryHighestUsnPrefix = "Directory.HighestUsn.";
+    /// <summary>Text shown to the right of the title in the announcement window. Unset = "DomainNotice".</summary>
+    public const string AnnouncementHeaderText = "Announcements.HeaderText";
     /// <summary>JSON of the last release check (Updates).</summary>
     public const string UpdatesLastCheck = "Updates.LastCheck";
 }

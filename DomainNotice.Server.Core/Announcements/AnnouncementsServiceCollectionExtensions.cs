@@ -14,6 +14,7 @@ public static class AnnouncementsServiceCollectionExtensions
 
         // IAgentHub is resolved lazily inside the coordinator (the hub itself depends on observers/handlers).
         services.AddSingleton<DeliveryCoordinator>();
+        services.AddSingleton<IAnnouncementWindowSettings, AnnouncementWindowSettings>();
         services.AddSingleton<IAgentLifecycleObserver>(sp => sp.GetRequiredService<DeliveryCoordinator>());
 
         services.AddSingleton<ConfirmationHandler>();

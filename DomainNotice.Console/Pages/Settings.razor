@@ -18,6 +18,7 @@
 @inject ISnackbar Snackbar
 @inject IDialogService Dialogs
 @inject BrowserClock Clock
+@inject IAnnouncementWindowSettings WindowSettings
 
 <PageTitle>Settings · DomainNotice</PageTitle>
 
@@ -172,6 +173,26 @@
         </MudSimpleTable>
     </MudTabPanel>
 
+    <MudTabPanel Text="Announcement window" Icon="@Icons.Material.Filled.WebAsset">
+        <MudText Typo="Typo.body2" Class="mb-3">How announcements look on the PCs. Changes apply to announcements shown from now on.</MudText>
+        <div class="dn-settings-window">
+            <div>
+                <MudTextField T="string" Label="Text to the right of the title" @bind-Value="_headerText" Immediate="true"
+                              MaxLength="@AnnouncementWindowDefaults.HeaderTextMax" Counter="@AnnouncementWindowDefaults.HeaderTextMax"
+                              HelperText="@($"For example your organisation's name. Leave empty for none. Default: {AnnouncementWindowDefaults.HeaderText}.")"
+                              Variant="Variant.Outlined" ReadOnly="!_isAdmin" />
+                <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+                    <div class="d-flex gap-2 mt-3">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="SaveHeaderTextAsync">Save</MudButton>
+                        <MudButton Variant="Variant.Text" Disabled="_busy" OnClick="@(() => _headerText = AnnouncementWindowDefaults.HeaderText)">Default</MudButton>
+                    </div>
+                </AuthorizeView>
+            </div>
+            <AgentWindowPreview Title="Example title" HeaderText="@_headerText" Html="@("<p>The message of the announcement.</p>")"
+                                Buttons="@(new[] { "OK" })" MinSeconds="10" UnlockMode="UnlockMode.AfterTime" />
+        </div>
+    </MudTabPanel>
+
     <MudTabPanel Text="About and updates" Icon="@Icons.Material.Filled.Info" BadgeData="@(_update?.UpdateAvailable == true ? "!" : null)" BadgeColor="Color.Warning">
         @if (_update is null)
         {
@@ -227,7 +248,8 @@
 </MudTabs>
 
 @code {
-    private static readonly string[] Tabs = ["enrolment", "agent", "history", "accounts", "about"];
+    private static readonly string[] Tabs = ["enrolment", "agent", "history", "accounts", "window", "about"];
+    private string _headerText = AnnouncementWindowDefaults.HeaderText;
 
     [SupplyParameterFromQuery(Name = "tab")] public string? Tab { get; set; }
     [SupplyParameterFromQuery(Name = "imported")] public string? Imported { get; set; }
@@ -259,6 +281,7 @@
         if (!RendererInfo.IsInteractive) return;
         _isAdmin = await Me.IsAdminAsync();
         await Task.WhenAll(LoadEnrolmentAsync(), LoadPackagesAsync(), LoadAccountsAsync(), LoadUpdatesAsync());
+        _headerText = await WindowSettings.GetHeaderTextAsync();
     }
 
     private async Task LoadEnrolmentAsync()
@@ -319,6 +342,22 @@
         var result = await Enrolment.SetPasswordAsync(password, actor);
         Snackbar.Add(result.Ok ? "Install password saved." : result.Error ?? "Failed.", result.Ok ? Severity.Success : Severity.Error);
         await LoadEnrolmentAsync();
+    }
+
+    private async Task SaveHeaderTextAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        _busy = true;
+        try
+        {
+            var result = await WindowSettings.SetHeaderTextAsync(_headerText, actor);
+            if (result.Ok) Snackbar.Add("Saved.", Severity.Success);
+            else Snackbar.Add(result.Error ?? "Not saved.", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     private async Task SetPolicyAsync(AwaitingApprovalPolicy policy)

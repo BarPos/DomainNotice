@@ -103,6 +103,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasKey(x => x.Id);
             e.Property(x => x.Id).ValueGeneratedNever();
             e.Property(x => x.Title).HasMaxLength(200).IsRequired();
+            e.Property(x => x.DisplayTitle).HasMaxLength(200).IsRequired().HasDefaultValue("");
             e.Property(x => x.UnlockMode).HasConversion<string>().HasMaxLength(32);
             e.Property(x => x.CreatedBy).HasMaxLength(255);
             e.Property(x => x.UpdatedBy).HasMaxLength(255);

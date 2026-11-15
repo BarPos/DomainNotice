@@ -11,9 +11,15 @@ body { margin: 0; }
 .dn-drawer .mud-nav-link.active .mud-nav-link-icon { color: #ffffff; }
 .dn-nav-badge { margin-left: 6px; }
 .dn-brand { font-weight: 600; letter-spacing: 0.02em; }
-.dn-appbar-search { max-width: 460px; min-width: 220px; }
-.dn-appbar-search .mud-input { background: rgba(255, 255, 255, 0.12); border-radius: 4px; }
-.dn-appbar-search input { color: inherit; }
+.dn-appbar-search { flex: 1 1 640px; max-width: 720px; min-width: 260px; }
+.dn-appbar-search .mud-input-control { margin: 0 !important; }
+.dn-appbar-search .mud-input { background: rgba(255, 255, 255, 0.12); border-radius: 6px; height: 40px; align-items: center; padding: 0 10px; }
+.dn-appbar-search .mud-input-slot, .dn-appbar-search input { color: inherit; padding-top: 0 !important; padding-bottom: 0 !important;
+                                                              height: 40px; line-height: 40px; }
+.dn-appbar-search .mud-input-adornment { align-self: center; height: 40px; }
+.dn-appbar-search input::placeholder, .dn-appbar-search input.mud-input-root::placeholder { color: rgba(255, 255, 255, 0.72) !important; opacity: 1 !important; }
+.dn-appbar-search .mud-input-adornment .mud-icon-root { color: rgba(255, 255, 255, 0.85); }
+@media (max-width: 700px) { .dn-appbar-search { min-width: 0; flex-basis: 160px; } }
 
 /* ---------- page pattern: tree left, grid middle ---------- */
 .dn-page-title { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
@@ -87,7 +93,11 @@ body { margin: 0; }
 /* Preview styled like the agent's announcement window (always the same light window, as on the PC). */
 .dn-agent-window { border: 1px solid #b8c2cc; border-radius: 6px; overflow: hidden; background: #ffffff; color: #1b1f23;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); font-family: "Segoe UI", system-ui, sans-serif; }
-.dn-agent-titlebar { background: #2b3a4a; color: #ffffff; padding: 8px 12px; font-size: 0.9rem; display: flex; justify-content: space-between; }
+.dn-agent-titlebar { background: #2b3a4a; color: #ffffff; padding: 10px 14px; font-size: 0.95rem; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; min-height: 22px; }
+.dn-agent-title { font-weight: 600; overflow-wrap: anywhere; }
+.dn-agent-header-text { opacity: 0.8; font-size: 0.85rem; white-space: nowrap; }
+.dn-settings-window { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(300px, 1.4fr); gap: 24px; align-items: start; }
+@media (max-width: 900px) { .dn-settings-window { grid-template-columns: 1fr; } }
 .dn-agent-body { padding: 16px 20px; max-height: 420px; overflow: auto; font-size: 0.95rem; line-height: 1.5; }
 .dn-agent-body h1, .dn-agent-body h2, .dn-agent-body h3 { margin: 0.4em 0; }
 .dn-agent-body a { color: #0b5cad; }

@@ -120,7 +120,10 @@ public sealed record AnnouncementQuestion
 public sealed record AnnouncementPayload
 {
     public Guid Id { get; init; }
+    /// <summary>Title shown above the message (the announcement's display title; may be empty).</summary>
     public string Title { get; init; } = "";
+    /// <summary>Text to the right of the title (Console setting). Added in 1.0.3; null from older servers.</summary>
+    public string? HeaderText { get; init; }
     public string BodyMarkdown { get; init; } = "";
     public int MinDismissSeconds { get; init; }
     public UnlockMode UnlockMode { get; init; }

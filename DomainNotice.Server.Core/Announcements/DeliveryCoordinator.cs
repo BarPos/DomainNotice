@@ -241,17 +241,24 @@ internal sealed class DeliveryCoordinator : IAgentLifecycleObserver
         {
             DeliveryId = deliveryId,
             SessionUser = userName,
-            Announcement = ToPayload(announcement),
+            Announcement = ToPayload(announcement, await HeaderTextAsync(ct)),
         }, ct);
         if (!sent)
             _logger.LogInformation("Show {DeliveryId} not sent (computer {ComputerId} offline); it is re-sent on reconnect", deliveryId, computerId);
     }
 
     /// <summary>The window content: only items that are not hidden, in sort order.</summary>
-    public static AnnouncementPayload ToPayload(Announcement a) => new()
+    private async Task<string?> HeaderTextAsync(CancellationToken ct)
+    {
+        var window = _services.GetService<IAnnouncementWindowSettings>();
+        return window is null ? null : await window.GetHeaderTextAsync(ct);
+    }
+
+    public static AnnouncementPayload ToPayload(Announcement a, string? headerText = null) => new()
     {
         Id = a.Id,
-        Title = a.Title,
+        Title = a.DisplayTitle,
+        HeaderText = headerText,
         BodyMarkdown = a.BodyMarkdown,
         MinDismissSeconds = a.MinDismissSeconds,
         UnlockMode = a.UnlockMode,

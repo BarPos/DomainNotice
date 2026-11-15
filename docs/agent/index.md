@@ -67,7 +67,10 @@ this.
    10 minutes.
 4. **Kerberos proof:** proves which AD computer it is with a Kerberos ticket for the server's SPN, bound to the TLS
    channel. This works only on domain-joined PCs with the SPN registered.
-5. **Delivery:** shows each pushed announcement to the matching user. The window:
+5. **Delivery:** shows each pushed announcement to the matching user. The window looks like the preview in the
+   Console editor: a dark title bar with the announcement's title on the left and the text from
+   **Settings → Announcement window** on the right; then the message and the questions; and a light footer with the
+   countdown on the left and the buttons on the right, the first one highlighted. The window:
    - stays on top, has no close button, and ignores Esc and Alt+F4;
    - unlocks its buttons after the minimum time and/or once the required questions are answered;
    - renders Markdown.

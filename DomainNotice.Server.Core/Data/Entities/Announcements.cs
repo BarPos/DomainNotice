@@ -22,7 +22,10 @@ public enum TargetKind
 public class Announcement
 {
     public Guid Id { get; set; }
+    /// <summary>Name in the Console (lists, results, audit). Not shown on the PCs.</summary>
     public string Title { get; set; } = "";
+    /// <summary>Title shown above the message in the announcement window on the PCs (may be empty).</summary>
+    public string DisplayTitle { get; set; } = "";
     public string BodyMarkdown { get; set; } = "";
     public int MinDismissSeconds { get; set; } = 10;
     public UnlockMode UnlockMode { get; set; } = UnlockMode.AfterTimeAndRequired;

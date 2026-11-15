@@ -16,12 +16,22 @@ nav_order: 1
 
 | Step | |
 |---|---|
-| **Basic** | Title, draft or published |
-| **Content** | Markdown body, with a live preview of the agent window. Raw HTML is disabled; only http/https links are kept. |
+| **Basic** | **Name**, used only in the Console (lists, results, audit log); unlock rule, anonymous answers, draft |
+| **Content** | **Title** shown above the message on the PCs (optional), the Markdown message, and a live preview of the agent window. Raw HTML is disabled; only http/https links are kept. |
 | **Buttons and questions** | At least one button. Questions are single or multiple choice, optionally required. Turn on **anonymous answers** here. |
 | **Targets** | Pick from the synced directory (users, groups, computers, OUs) or from enrolled computers. No targets means everyone. |
 | **Schedule** | Start and end (entered in your browser's time zone, stored in UTC), times shown per user, repeat interval, unlock rule and minimum seconds |
 | **Summary** | Validation, then save |
+
+### Name and title
+
+An announcement has two titles:
+- **Name** (Basic step): what admins see in the Console. The PCs never show it. Use it for internal labels such
+  as "IT: Q3 phishing reminder".
+- **Title** (Content step): what users see in bold in the window's title bar. It can be empty.
+
+The window's title bar also shows a text on the right, for example your organisation's name. It is set once for
+all announcements in **Settings → Announcement window** (default "DomainNotice").
 
 ### Unlock rules
 

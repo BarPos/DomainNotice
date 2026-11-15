@@ -22,6 +22,7 @@ public class EndToEndTests(PostgresFixture pg)
         var model = new AnnouncementEditModel
         {
             Title = title,
+            DisplayTitle = title + " (on the PCs)",
             BodyMarkdown = "**Hello** world",
             MinDismissSeconds = 0,
             UnlockMode = UnlockMode.AfterTime,
@@ -55,7 +56,8 @@ public class EndToEndTests(PostgresFixture pg)
         var show = await agent.ReceiveAsync<Show>(TimeSpan.FromSeconds(20), Ct);
         Assert.Equal(id, show.Announcement.Id);
         Assert.Equal(@"CORP\alice", show.SessionUser, ignoreCase: true);
-        Assert.Equal("Maintenance tonight", show.Announcement.Title);
+        Assert.Equal("Maintenance tonight (on the PCs)", show.Announcement.Title); // the display title, not the Console name
+        Assert.Equal(AnnouncementWindowDefaults.HeaderText, show.Announcement.HeaderText);
 
         await agent.SendAsync(new Shown { DeliveryId = show.DeliveryId }, ct: Ct);
         await TestAgentServer.WaitUntilAsync(async () =>

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using DomainNotice.Server.Abstractions;
 using DomainNotice.Server.Announcements;
 using DomainNotice.Server.Data.Entities;
@@ -38,7 +39,7 @@ public class AnnouncementServiceTests(PostgresFixture pg)
             Targets = [new TargetEdit { Kind = TargetKind.Computer }],
         };
         var errors = h.Service.Validate(m);
-        Assert.Contains(errors, e => e.Contains("Title"));
+        Assert.Contains(errors, e => e.Contains("Name")); // the Console name (Title) is limited to 200 characters
         Assert.Contains(errors, e => e.Contains("End time"));
         Assert.Contains(errors, e => e.Contains("at least 1"));
         Assert.Contains(errors, e => e.Contains("Repeat interval"));
@@ -141,6 +142,36 @@ public class AnnouncementServiceTests(PostgresFixture pg)
         var payload = DeliveryCoordinator.ToPayload(after);
         Assert.Equal(["Yes!", "Maybe"], payload.Buttons.Select(b => b.Label));
         Assert.Equal(["Blue", "Green"], payload.Questions.Single().Options.Select(o => o.Label));
+    }
+
+    [Fact]
+    public async Task Console_name_and_display_title_are_separate_and_header_text_is_sent()
+    {
+        await using var h = await AnnouncementHarness.CreateAsync(pg);
+        var model = AnnouncementHarness.Model("Internal: Q3 notice");
+        model.DisplayTitle = "  Office closed on Friday  ";
+        var id = await h.SaveAsync(model);
+
+        var a = await h.LoadAnnouncementAsync(id);
+        Assert.Equal("Internal: Q3 notice", a.Title);
+        Assert.Equal("Office closed on Friday", a.DisplayTitle);
+        Assert.Equal("Office closed on Friday", (await h.Service.GetForEditAsync(id, h.Ct))!.DisplayTitle);
+
+        var window = h.Services.GetRequiredService<IAnnouncementWindowSettings>();
+        Assert.Equal(AnnouncementWindowDefaults.HeaderText, await window.GetHeaderTextAsync(h.Ct));
+        Assert.True((await window.SetHeaderTextAsync("  ACME IT  ", "tester", h.Ct)).Ok);
+        Assert.Equal("ACME IT", await window.GetHeaderTextAsync(h.Ct));
+        Assert.False((await window.SetHeaderTextAsync(new string('x', AnnouncementWindowDefaults.HeaderTextMax + 1), "tester", h.Ct)).Ok);
+        Assert.True((await window.SetHeaderTextAsync("", "tester", h.Ct)).Ok);
+        Assert.Equal("", await window.GetHeaderTextAsync(h.Ct)); // empty = no text, not the default
+
+        var payload = DeliveryCoordinator.ToPayload(a, "ACME IT");
+        Assert.Equal("Office closed on Friday", payload.Title); // the PCs never see the Console name
+        Assert.Equal("ACME IT", payload.HeaderText);
+
+        var tooLong = AnnouncementHarness.Model("x");
+        tooLong.DisplayTitle = new string('t', 201);
+        Assert.Contains(h.Service.Validate(tooLong), e => e.StartsWith("Title must be"));
     }
 
     [Fact]

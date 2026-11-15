@@ -8,6 +8,7 @@
 @inject ConsoleUser Me
 @inject ISnackbar Snackbar
 @inject BrowserClock Clock
+@inject IAnnouncementWindowSettings WindowSettings
 
 <PageTitle>@(Id is null ? "New announcement" : "Edit announcement") · DomainNotice</PageTitle>
 
@@ -52,7 +53,8 @@ else
             {
                 case 0:
                     <MudStack Spacing="3">
-                        <MudTextField T="string" Label="Title" @bind-Value="_model.Title" Variant="Variant.Outlined" MaxLength="200" Counter="200" Immediate="true" ReadOnly="!_isAdmin" />
+                        <MudTextField T="string" Label="Name" HelperText="Shown only in the Console (lists, results). The title people see is set in the Content step."
+                                      @bind-Value="_model.Title" Variant="Variant.Outlined" MaxLength="200" Counter="200" Immediate="true" ReadOnly="!_isAdmin" />
                         <MudSelect T="UnlockMode" Label="When can the buttons be used?" @bind-Value="_model.UnlockMode" Variant="Variant.Outlined" ReadOnly="!_isAdmin">
                             <MudSelectItem Value="UnlockMode.AfterTime">After the minimum time</MudSelectItem>
                             <MudSelectItem Value="UnlockMode.AfterRequired">After the required questions are answered</MudSelectItem>
@@ -71,13 +73,16 @@ else
                 case 1:
                     <div class="dn-content-split">
                         <div>
-                            <MudTextField T="string" Label="Message (Markdown)" Value="_model.BodyMarkdown" ValueChanged="BodyChanged" Lines="20"
+                            <MudTextField T="string" Label="Title" HelperText="Shown above the message on the PCs (optional)"
+                                          @bind-Value="_model.DisplayTitle" Variant="Variant.Outlined" MaxLength="200" Counter="200" Immediate="true"
+                                          ReadOnly="!_isAdmin" Class="mb-3" />
+                            <MudTextField T="string" Label="Message (Markdown)" Value="_model.BodyMarkdown" ValueChanged="BodyChanged" Lines="18"
                                           Variant="Variant.Outlined" Immediate="true" DebounceInterval="300" ReadOnly="!_isAdmin" Class="dn-mono" />
                             <MudText Typo="Typo.caption">Markdown: **bold**, *italic*, lists, links, headings. Raw HTML is not allowed.</MudText>
                         </div>
                         <div>
                             <MudText Typo="Typo.subtitle2" Class="mb-2">Preview of the agent window</MudText>
-                            <AgentWindowPreview Title="@_model.Title" Html="@_previewHtml" Buttons="@_model.Buttons.Select(b => b.Label).ToList()"
+                            <AgentWindowPreview Title="@_model.DisplayTitle" HeaderText="@_headerText" Html="@_previewHtml" Buttons="@_model.Buttons.Select(b => b.Label).ToList()"
                                                 Questions="_model.Questions" MinSeconds="_model.MinDismissSeconds" UnlockMode="_model.UnlockMode" />
                         </div>
                     </div>
@@ -195,7 +200,8 @@ else
                         <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">Ready to save.</MudAlert>
                     }
                     <dl class="dn-kv">
-                        <dt>Title</dt><dd>@_model.Title</dd>
+                        <dt>Name</dt><dd>@_model.Title</dd>
+                        <dt>Title on the PCs</dt><dd>@(string.IsNullOrWhiteSpace(_model.DisplayTitle) ? "(none)" : _model.DisplayTitle)</dd>
                         <dt>Status</dt><dd>@(_model.IsDraft ? "Draft (not delivered)" : "Will be delivered in the time window")</dd>
                         <dt>Window</dt><dd>@Clock.Format(_model.StartUtc) – @Clock.Format(_model.EndUtc)</dd>
                         <dt>Buttons</dt><dd>@string.Join(", ", _model.Buttons.Select(b => b.Label))</dd>
@@ -239,8 +245,11 @@ else
     private int _step;
     private string _previewHtml = "";
 
+    private string _headerText = AnnouncementWindowDefaults.HeaderText;
+
     protected override async Task OnInitializedAsync()
     {
+        _headerText = await WindowSettings.GetHeaderTextAsync();
         Clock.Changed += OnClockChanged;
         if (!RendererInfo.IsInteractive) return;
         _isAdmin = await Me.IsAdminAsync();

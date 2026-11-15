@@ -19,6 +19,7 @@ public class MigrationTests(PostgresFixture pg)
         await ctx.Database.MigrateAsync(ct);
         Assert.Empty(await ctx.Database.GetPendingMigrationsAsync(ct));
         Assert.Contains("20261115181506_Initial", await ctx.Database.GetAppliedMigrationsAsync(ct));
+        Assert.Contains(await ctx.Database.GetAppliedMigrationsAsync(ct), m => m.EndsWith("_AnnouncementDisplayTitle"));
 
         // Re-running is a no-op (install.sh / update.sh call --migrate-only repeatedly).
         await ctx.Database.MigrateAsync(ct);

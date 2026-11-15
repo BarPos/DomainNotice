@@ -2,8 +2,8 @@
    (Markdig with raw HTML disabled) — the only place the Console renders HTML built from user content. *@
 <div class="dn-agent-window" aria-label="Preview of the agent window">
     <div class="dn-agent-titlebar">
-        <span>@(string.IsNullOrWhiteSpace(Title) ? "(no title)" : Title)</span>
-        <span>DomainNotice</span>
+        <span class="dn-agent-title">@Title</span>
+        <span class="dn-agent-header-text">@HeaderText</span>
     </div>
     <div class="dn-agent-body dn-markdown">
         @((MarkupString)Html)
@@ -33,7 +33,10 @@
 </div>
 
 @code {
+    /// <summary>The title shown on the PCs (may be empty).</summary>
     [Parameter] public string? Title { get; set; }
+    /// <summary>Settings → Announcement window: text to the right of the title.</summary>
+    [Parameter] public string? HeaderText { get; set; } = AnnouncementWindowDefaults.HeaderText;
     [Parameter] public string Html { get; set; } = "";
     [Parameter] public IReadOnlyList<string> Buttons { get; set; } = [];
     [Parameter] public IReadOnlyList<QuestionEdit> Questions { get; set; } = [];

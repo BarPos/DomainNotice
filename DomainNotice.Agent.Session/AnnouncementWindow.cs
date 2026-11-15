@@ -49,7 +49,9 @@ internal sealed class AnnouncementWindow : Window
         _sendConfirm = sendConfirm;
         _reportShown = reportShown;
 
-        Title = string.IsNullOrWhiteSpace(_announcement.Title) ? "Announcement" : _announcement.Title;
+        Title = string.IsNullOrWhiteSpace(_announcement.Title) ? (_announcement.HeaderText is { Length: > 0 } h ? h : "Announcement") : _announcement.Title;
+        FontFamily = NoticeTheme.Font;
+        Foreground = NoticeTheme.Text;
         Icon = NoticeIcon.WindowIcon();
         Width = 680;
         Height = 560;
@@ -65,27 +67,57 @@ internal sealed class AnnouncementWindow : Window
         foreach (var question in _announcement.Questions)
             _selected[question.Id] = [];
 
-        _countdown = new TextBlock { Margin = new Thickness(0, 0, 0, 8), TextWrapping = TextWrapping.Wrap };
+        _countdown = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 13,
+            Foreground = NoticeTheme.MutedText,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0),
+        };
         _error = new TextBlock
         {
             Margin = new Thickness(0, 0, 0, 8),
             TextWrapping = TextWrapping.Wrap,
-            Foreground = new SolidColorBrush(WpfColor.FromRgb(0xB0, 0x1E, 0x1E)),
+            Foreground = NoticeTheme.ErrorText,
             Visibility = Visibility.Collapsed,
         };
 
-        var title = new TextBlock
+        // Same look as the preview in the Console: dark title bar (title left, configurable text right), the message,
+        // the questions, and a light footer with the countdown on the left and the buttons on the right.
+        var titleText = new TextBlock
         {
-            Text = Title,
-            FontSize = 20,
-            FontWeight = FontWeights.Bold,
+            Text = _announcement.Title ?? "",
+            Foreground = NoticeTheme.TitleBarText,
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
             TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
         };
+        var headerText = new TextBlock
+        {
+            // Older servers do not send it: show the product name as before.
+            Text = _announcement.HeaderText ?? "DomainNotice",
+            Foreground = NoticeTheme.TitleBarText,
+            Opacity = 0.8,
+            FontSize = 13,
+            Margin = new Thickness(16, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var titleGrid = new Grid();
+        titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MaxWidth = 260 });
+        Grid.SetColumn(titleText, 0);
+        Grid.SetColumn(headerText, 1);
+        titleGrid.Children.Add(titleText);
+        titleGrid.Children.Add(headerText);
         var header = new Border
         {
-            Background = new SolidColorBrush(WpfColor.FromRgb(244, 244, 244)),
-            Padding = new Thickness(16),
-            Child = title,
+            Background = NoticeTheme.TitleBarBackground,
+            Padding = new Thickness(16, 12, 16, 12),
+            MinHeight = 44,
+            Child = titleGrid,
         };
         // The window has no title bar; let the header move it.
         header.MouseLeftButtonDown += (_, e) =>
@@ -93,17 +125,23 @@ internal sealed class AnnouncementWindow : Window
             if (e.ButtonState == MouseButtonState.Pressed) DragMove();
         };
 
+        var document = MarkdownView.ToDocument(_announcement.BodyMarkdown);
+        document.FontSize = NoticeTheme.BodyFontSize;
+        document.Foreground = NoticeTheme.Text;
+        document.LineHeight = NoticeTheme.BodyFontSize * 1.5;
         var body = new WpfRichTextBox
         {
             IsReadOnly = true,
             IsDocumentEnabled = true,
             BorderThickness = new Thickness(0),
+            Background = WpfBrushes.Transparent,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Document = MarkdownView.ToDocument(_announcement.BodyMarkdown),
-            Margin = new Thickness(16, 12, 16, 0),
+            Document = document,
+            Margin = new Thickness(16, 14, 16, 4),
+            Padding = new Thickness(0),
         };
 
-        var questions = new StackPanel { Margin = new Thickness(16, 8, 16, 0) };
+        var questions = new StackPanel { Margin = new Thickness(20, 0, 20, 8) };
         foreach (var question in _announcement.Questions)
             questions.Children.Add(BuildQuestion(question));
         var questionsScroll = new ScrollViewer
@@ -118,14 +156,16 @@ internal sealed class AnnouncementWindow : Window
             Orientation = WpfOrientation.Horizontal,
             HorizontalAlignment = WpfHorizontalAlignment.Right,
         };
-        foreach (var button in _announcement.Buttons)
+        for (var i = 0; i < _announcement.Buttons.Count; i++)
         {
+            var button = _announcement.Buttons[i];
             var control = new WpfButton
             {
                 Content = button.Label,
+                Style = NoticeTheme.ButtonStyle(primary: i == 0),
                 Margin = new Thickness(8, 0, 0, 0),
-                Padding = new Thickness(14, 6, 14, 6),
                 IsEnabled = false,
+                IsDefault = false,
                 Tag = button.Id,
             };
             var id = button.Id;
@@ -134,12 +174,23 @@ internal sealed class AnnouncementWindow : Window
             buttonPanel.Children.Add(control);
         }
 
-        var footer = new StackPanel { Margin = new Thickness(16) };
-        footer.Children.Add(_error);
-        footer.Children.Add(_countdown);
-        footer.Children.Add(buttonPanel);
+        var footerRow = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(buttonPanel, Dock.Right);
+        footerRow.Children.Add(buttonPanel);
+        footerRow.Children.Add(_countdown);
+        var footerStack = new StackPanel();
+        footerStack.Children.Add(_error);
+        footerStack.Children.Add(footerRow);
+        var footer = new Border
+        {
+            Background = NoticeTheme.FooterBackground,
+            BorderBrush = NoticeTheme.FooterBorder,
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(16, 12, 16, 12),
+            Child = footerStack,
+        };
 
-        var layout = new DockPanel();
+        var layout = new DockPanel { Background = WpfBrushes.White };
         DockPanel.SetDock(header, Dock.Top);
         DockPanel.SetDock(footer, Dock.Bottom);
         DockPanel.SetDock(questionsScroll, Dock.Bottom);
@@ -150,7 +201,7 @@ internal sealed class AnnouncementWindow : Window
 
         Content = new Border
         {
-            BorderBrush = WpfBrushes.Gray,
+            BorderBrush = NoticeTheme.WindowBorder,
             BorderThickness = new Thickness(1),
             Child = layout,
         };
@@ -188,8 +239,9 @@ internal sealed class AnnouncementWindow : Window
         var panel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         panel.Children.Add(new TextBlock
         {
-            Text = question.Required ? question.Prompt + " (required)" : question.Prompt,
+            Text = question.Required ? question.Prompt + " *" : question.Prompt,
             FontWeight = FontWeights.SemiBold,
+            FontSize = 14,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 4),
         });

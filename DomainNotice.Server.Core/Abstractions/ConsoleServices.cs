@@ -18,7 +18,10 @@ public sealed class AnnouncementEditModel
 {
     /// <summary>Null = new.</summary>
     public Guid? Id { get; set; }
+    /// <summary>Name of the announcement in the Console (lists, results). Not shown on the PCs.</summary>
     public string Title { get; set; } = "";
+    /// <summary>Title shown above the message in the window on the PCs. Optional.</summary>
+    public string DisplayTitle { get; set; } = "";
     public string BodyMarkdown { get; set; } = "";
     public int MinDismissSeconds { get; set; } = 10;
     public UnlockMode UnlockMode { get; set; } = UnlockMode.AfterTimeAndRequired;
@@ -80,6 +83,20 @@ public interface IAnnouncementService
     IReadOnlyList<string> Validate(AnnouncementEditModel model);
     /// <summary>Safe HTML for the live preview (Markdig, raw HTML disabled).</summary>
     string RenderPreviewHtml(string markdown);
+}
+
+public static class AnnouncementWindowDefaults
+{
+    public const string HeaderText = "DomainNotice";
+    public const int HeaderTextMax = 60;
+}
+
+/// <summary>Settings of the announcement window shown on the PCs (Settings → Announcement window).</summary>
+public interface IAnnouncementWindowSettings
+{
+    /// <summary>Text to the right of the title. Default "DomainNotice"; empty = none.</summary>
+    Task<string> GetHeaderTextAsync(CancellationToken ct = default);
+    Task<OperationResult> SetHeaderTextAsync(string? text, string actor, CancellationToken ct = default);
 }
 
 /// <summary>CSV exports, UTF-8 with BOM. Anonymous answers have no user/computer/time columns (plan 8.4).</summary>

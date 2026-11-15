@@ -62,6 +62,7 @@ internal sealed class AnnouncementService(
         {
             Id = a.Id,
             Title = a.Title,
+            DisplayTitle = a.DisplayTitle,
             BodyMarkdown = a.BodyMarkdown,
             MinDismissSeconds = a.MinDismissSeconds,
             UnlockMode = a.UnlockMode,
@@ -97,8 +98,9 @@ internal sealed class AnnouncementService(
     {
         var errors = new List<string>();
         var title = model.Title?.Trim() ?? "";
-        if (title.Length == 0) errors.Add("Title is required.");
-        else if (title.Length > TitleMax) errors.Add($"Title must be {TitleMax} characters or fewer.");
+        if (title.Length == 0) errors.Add("Name is required.");
+        else if (title.Length > TitleMax) errors.Add($"Name must be {TitleMax} characters or fewer.");
+        if ((model.DisplayTitle?.Trim().Length ?? 0) > TitleMax) errors.Add($"Title must be {TitleMax} characters or fewer.");
 
         if (model.MinDismissSeconds < 0) errors.Add("Minimum time to dismiss cannot be negative.");
         if (model.MaxDisplays < 1) errors.Add("Number of times shown must be at least 1.");
@@ -256,6 +258,7 @@ internal sealed class AnnouncementService(
         }
 
         a.Title = model.Title.Trim();
+        a.DisplayTitle = model.DisplayTitle?.Trim() ?? "";
         a.BodyMarkdown = model.BodyMarkdown ?? "";
         a.MinDismissSeconds = model.MinDismissSeconds;
         a.UnlockMode = model.UnlockMode;

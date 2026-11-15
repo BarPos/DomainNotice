@@ -304,7 +304,7 @@ public sealed class AnnouncementsList : GridList<Announcement, AnnouncementRow>
 
     public override IReadOnlyList<GridColumn<AnnouncementRow>> Columns { get; } =
     [
-        new("title", "Title", r => r.Title, SortField: "title"),
+        new("title", "Name", r => r.Title, SortField: "title"),
         new("status", "Status", r => r.StatusAt(DateTime.UtcNow).ToString(), SortField: "status"),
         new("start", "Start", r => r.StartUtc, ColumnKind.Date, "start"),
         new("end", "End", r => r.EndUtc, ColumnKind.Date, "end"),
@@ -329,7 +329,8 @@ public sealed class AnnouncementsList : GridList<Announcement, AnnouncementRow>
         Expression<Func<Announcement, int>> statusSort = a => a.IsDraft ? 0 : 1;
         return
         [
-            GridField.Text<Announcement>("title", "Title", a => a.Title, search: true),
+            GridField.Text<Announcement>("title", "Name", a => a.Title, search: true),
+            GridField.Text<Announcement>("displayTitle", "Title on the PCs", a => a.DisplayTitle, search: true),
             GridField.Choice<Announcement>("status", "Status", StatusOptions, (value, now) => value switch
             {
                 nameof(AnnouncementStatus.Draft) => a => a.IsDraft,

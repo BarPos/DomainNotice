@@ -101,6 +101,13 @@ namespace DomainNotice.Server.Data.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
 
+                    b.Property<string>("DisplayTitle")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasDefaultValue("");
+
                     b.Property<DateTime>("EndUtc")
                         .HasColumnType("timestamp with time zone");
 

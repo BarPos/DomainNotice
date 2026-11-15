@@ -44,7 +44,7 @@ nav_order: 1
 | S→A | `Welcome` | `compatible, serverVersion, kerberosServicePrincipal?` | **Frozen** |
 | A→S | `Status` | `computerName, localIps[], sessions[]` | On change and every 10 min |
 | S→A | `Refused` | `reason, message?` | `unknown-key`, `revoked`, `replaced`, `protocol-error`, `rate-limited`; then close |
-| S→A | `Show` | `deliveryId, sessionUser, announcement{…}` | Push one announcement to one user |
+| S→A | `Show` | `deliveryId, sessionUser, announcement{id, title, headerText?, bodyMarkdown, minDismissSeconds, unlockMode, anonymousAnswers, buttons[], questions[]}` | Push one announcement to one user. `title` is the display title; `headerText` (since 1.0.3) is the text right of it. |
 | A→S | `Shown` | `deliveryId` | The window really appeared |
 | A→S | `Confirm` | `deliveryId, buttonId, answers[{questionId, optionIds[]}]` | |
 | S→A | `ConfirmResult` | `deliveryId, accepted, error?` | `replyTo` = the Confirm id |

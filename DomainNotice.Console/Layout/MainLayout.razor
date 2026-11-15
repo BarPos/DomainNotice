@@ -6,7 +6,7 @@
 @inject NavigationManager Nav
 @inject ILogger<MainLayout> Logger
 
-<MudThemeProvider Theme="ConsoleTheme.Theme" IsDarkMode="_dark" />
+<MudThemeProvider Theme="ConsoleTheme.Theme" IsDarkMode="false" />
 <MudPopoverProvider />
 <MudDialogProvider CloseOnEscapeKey="true" BackdropClick="false" />
 <MudSnackbarProvider />
@@ -24,9 +24,6 @@
                           Immediate="true" OnKeyUp="SearchKeyUp" Underline="false" Class="px-2" aria-label="Global search" />
         </div>
         <MudSpacer />
-        <MudTooltip Text="@(_dark ? "Light theme" : "Dark theme")">
-            <MudIconButton Icon="@(_dark ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)" Color="Color.Inherit" OnClick="ToggleThemeAsync" aria-label="Toggle light or dark theme" />
-        </MudTooltip>
         <AuthorizeView>
             <Authorized>
                 <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Class="ml-2 mr-1" />
@@ -55,7 +52,6 @@
 
 @code {
     private bool _drawerOpen = true;
-    private bool _dark;
     private bool _updateAvailable;
     private string? _search;
 
@@ -67,8 +63,6 @@
         try
         {
             Clock.SetZone(await JS.InvokeAsync<string?>("domainNotice.timeZone"));
-            var theme = await JS.InvokeAsync<string?>("domainNotice.getTheme");
-            _dark = theme is null ? await JS.InvokeAsync<bool>("domainNotice.prefersDark") : theme == "dark";
         }
         catch (Exception ex) when (ex is JSException or JSDisconnectedException or TaskCanceledException)
         {
@@ -86,12 +80,6 @@
         StateHasChanged();
     }
 
-    private async Task ToggleThemeAsync()
-    {
-        _dark = !_dark;
-        try { await JS.InvokeVoidAsync("domainNotice.setTheme", _dark ? "dark" : "light"); }
-        catch (Exception ex) when (ex is JSException or JSDisconnectedException) { }
-    }
 
     private void SearchKeyUp(KeyboardEventArgs e)
     {
