@@ -74,7 +74,7 @@
 
     <!-- ===== Files and the service ================================================================== -->
     <ComponentGroup Id="AgentFiles" Directory="INSTALLFOLDER">
-      <!-- Agent + Session UI, both self-contained win-x64, published into one folder by build-agent-msi.ps1. -->
+      <!-- Agent (root) + Session UI (Session\ subfolder), both self-contained win-x64, published by build-agent-msi.ps1. -->
       <Files Include="$(var.AgentPublishDir)\**">
         <Exclude Files="$(var.AgentPublishDir)\DomainNotice.Agent.exe" />
         <Exclude Files="$(var.AgentPublishDir)\**\*.pdb" />
@@ -120,7 +120,7 @@
          protected DACL that allows SYSTEM only (inheritance broken). The service re-stores it DPAPI-encrypted on
          its first start, deletes this plain value, and deletes the encrypted copy after enrolment (plan 4). -->
     <Component Id="AgentInstallPassword" Directory="INSTALLFOLDER" Condition="INSTALLPASSWORD">
-      <RegistryKey Root="HKLM" Key="Software\DomainNotice\Agent\Secret">
+      <RegistryKey Root="HKLM" Key="Software\DomainNotice\Agent\Secret" ForceCreateOnInstall="yes">
         <PermissionEx Sddl="D:PAI(A;CI;KA;;;SY)" />
         <RegistryValue Name="Provided" Type="integer" Value="1" KeyPath="yes" />
         <RegistryValue Name="InstallPassword" Type="string" Value="[INSTALLPASSWORD]" />

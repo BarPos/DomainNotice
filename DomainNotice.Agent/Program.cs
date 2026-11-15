@@ -9,6 +9,11 @@ using DomainNotice.Shared;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Logging.EventLog;
 
+// Administrator tool: "DomainNotice.Agent.exe --reenrol" makes the service create a new key and enrol again
+// (e.g. after the server revoked this computer; a revoked key stays refused forever). Needs admin rights.
+if (args.Any(a => a.Equals("--reenrol", StringComparison.OrdinalIgnoreCase)))
+    return ReenrolCommand.Run();
+
 var paths = AgentPaths.Default;
 var folderError = paths.EnsureCreatedAndSecured();
 
@@ -71,11 +76,11 @@ if (folderError is not null) events.LogError("{Error}", folderError);
 try
 {
     host.Run();
+    return Environment.ExitCode;
 }
 catch (Exception ex)
 {
     events.LogCritical(ex, "DomainNotice Agent stopped after an unexpected error.");
     // Non-zero exit so the service recovery actions (restart after 1 minute) apply.
-    Environment.ExitCode = 1;
-    throw;
+    return 1;
 }

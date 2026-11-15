@@ -26,6 +26,7 @@ public sealed class AgentSettingsStore
     public const string SecretKeyPath = KeyPath + @"\Secret";
     private const string PlainPasswordValue = "InstallPassword";
     private const string ProtectedPasswordValue = "InstallPasswordProtected";
+    private const string ReenrolValue = "ReenrolRequested";
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("DomainNotice.Agent/InstallPassword/v1");
 
     private readonly object _gate = new();
@@ -84,10 +85,11 @@ public sealed class AgentSettingsStore
     }
 
     /// <summary>
-    /// First-start migration: encrypts a plain install password written by the MSI and removes the plain value.
-    /// When the computer is already enrolled, any password is deleted instead. Re-applies the SYSTEM-only DACL.
+    /// Start-up migration: encrypts a plain install password written by the MSI and removes the plain value, and
+    /// re-applies the SYSTEM-only DACL. A password given to an already enrolled agent is kept too: it is what lets
+    /// the agent re-key and enrol again after the server revoked its key (plan 4).
     /// </summary>
-    public void ProtectInstallPassword(bool alreadyEnrolled)
+    public void ProtectInstallPassword()
     {
         lock (_gate)
         {
@@ -97,13 +99,6 @@ public sealed class AgentSettingsStore
             secret.SetAccessControl(SystemOnlySecurity());
 
             var plain = secret.GetValue(PlainPasswordValue) as string;
-            if (alreadyEnrolled)
-            {
-                secret.DeleteValue(PlainPasswordValue, throwOnMissingValue: false);
-                secret.DeleteValue(ProtectedPasswordValue, throwOnMissingValue: false);
-                return;
-            }
-
             if (!string.IsNullOrEmpty(plain))
             {
                 var blob = NativeMethods.ProtectMachine(Encoding.UTF8.GetBytes(plain), Entropy);
@@ -112,6 +107,41 @@ public sealed class AgentSettingsStore
 
             // An empty value (e.g. an upgrade without INSTALLPASSWORD) never replaces a stored password.
             secret.DeleteValue(PlainPasswordValue, throwOnMissingValue: false);
+        }
+    }
+
+    /// <summary>Set by <c>DomainNotice.Agent.exe --reenrol</c> (run by an administrator): re-key and enrol again.</summary>
+    public bool ReenrolRequested()
+    {
+        lock (_gate)
+        {
+            using var hklm = Hklm;
+            using var key = hklm.OpenSubKey(KeyPath, writable: false);
+            return key?.GetValue(ReenrolValue) is int flag && flag != 0;
+        }
+    }
+
+    public void RequestReenrol()
+    {
+        lock (_gate)
+        {
+            using var hklm = Hklm;
+            using var key = hklm.CreateSubKey(KeyPath, writable: true);
+            key.SetValue(ReenrolValue, 1, RegistryValueKind.DWord);
+        }
+    }
+
+    /// <summary>Forgets the enrolment (ComputerId, cached certificate, re-enrol request) before a new key is made.</summary>
+    public void ClearEnrolment()
+    {
+        lock (_gate)
+        {
+            using var hklm = Hklm;
+            using var key = hklm.OpenSubKey(KeyPath, writable: true);
+            if (key is null) return;
+            key.DeleteValue("ComputerId", throwOnMissingValue: false);
+            key.DeleteValue("ClientCertificate", throwOnMissingValue: false);
+            key.DeleteValue(ReenrolValue, throwOnMissingValue: false);
         }
     }
 

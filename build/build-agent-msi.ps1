@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     1. Reads the version from Directory.Build.props (one version for Server, Console and Agent, plan 11.1).
-    2. Publishes DomainNotice.Agent (service) and DomainNotice.Agent.Session (UI) for win-x64, self-contained,
-       Release, into artifacts\agent-publish.
+    2. Publishes DomainNotice.Agent (service) into artifacts\agent-publish and DomainNotice.Agent.Session (UI)
+       into artifacts\agent-publish\Session, both win-x64, self-contained, Release.
     3. Builds DomainNotice.Agent.Installer\DomainNotice.Agent.Installer.wixproj.
     4. Writes artifacts\DomainNotice.Agent-<version>-x64.msi (asset name fixed by plan 11.4) and prints its SHA-256.
 
@@ -42,15 +42,21 @@ if (Test-Path $publish) {
 }
 New-Item -ItemType Directory -Force -Path $publish | Out-Null
 
-foreach ($project in @("DomainNotice.Agent\DomainNotice.Agent.csproj", "DomainNotice.Agent.Session\DomainNotice.Agent.Session.csproj")) {
-    Write-Host "Publishing $project ..."
-    dotnet publish (Join-Path $root $project) -c $Configuration -r win-x64 --self-contained true -p:DebugType=none -o $publish
+# The Session UI goes into its own subfolder: both apps are self-contained and a few same-named runtime files
+# differ between the plain and the Windows Desktop runtime (WindowsBase.dll, System.Drawing.dll, EventLog, ...).
+$targets = @(
+    @{ Project = "DomainNotice.Agent\DomainNotice.Agent.csproj"; Output = $publish },
+    @{ Project = "DomainNotice.Agent.Session\DomainNotice.Agent.Session.csproj"; Output = (Join-Path $publish "Session") }
+)
+foreach ($target in $targets) {
+    Write-Host "Publishing $($target.Project) ..."
+    dotnet publish (Join-Path $root $target.Project) -c $Configuration -r win-x64 --self-contained true -p:DebugType=none -o $target.Output
     if ($LASTEXITCODE -ne 0) {
-        throw "Publish of $project failed."
+        throw "Publish of $($target.Project) failed."
     }
 }
 
-foreach ($required in @("DomainNotice.Agent.exe", "DomainNotice.Agent.Session.exe")) {
+foreach ($required in @("DomainNotice.Agent.exe", "Session\DomainNotice.Agent.Session.exe")) {
     if (-not (Test-Path (Join-Path $publish $required))) {
         throw "$required is missing from $publish."
     }

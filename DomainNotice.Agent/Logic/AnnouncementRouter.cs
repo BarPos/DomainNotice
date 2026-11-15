@@ -209,14 +209,13 @@ public sealed class AnnouncementRouter
         lock (_gate) _endpoints.Remove(endpoint);
     }
 
-    /// <summary>The user has no Windows session left: drop their pending items (the server re-pushes at the next logon).</summary>
+    /// <summary>
+    /// The user has no Windows session left (decided from WTS, not from pipe state, which may lag behind):
+    /// drop their pending items. The server pushes them again at the next logon.
+    /// </summary>
     public int OnUserLoggedOff(string user)
     {
-        lock (_gate)
-        {
-            if (_endpoints.Any(e => PendingDeliveryStore.SameUser(e.UserName, user))) return 0;
-            return _store.RemoveUser(user);
-        }
+        lock (_gate) return _store.RemoveUser(user);
     }
 
     public async Task OnSessionMessageAsync(ISessionEndpoint endpoint, ILocalPayload message, CancellationToken ct)

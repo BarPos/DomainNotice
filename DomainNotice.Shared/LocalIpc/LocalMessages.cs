@@ -29,8 +29,15 @@ public static class LocalPipe
     /// <summary>Single-instance mutex of the Session UI (per logon session).</summary>
     public const string SessionMutexName = @"Local\DomainNotice.Agent.Session";
 
-    /// <summary>File name of the Session UI executable, next to the service executable.</summary>
+    /// <summary>File name of the Session UI executable.</summary>
     public const string SessionExeName = "DomainNotice.Agent.Session.exe";
+
+    /// <summary>
+    /// Subfolder of the install folder that holds the Session UI. Both apps are self-contained and their runtimes
+    /// differ in a few same-named files (WindowsBase.dll, System.Drawing.dll, System.Diagnostics.EventLog.dll ...),
+    /// so they cannot share one folder.
+    /// </summary>
+    public const string SessionSubfolder = "Session";
 }
 
 /// <summary>Fixed status texts the Session UI recognises (icon colour).</summary>

@@ -62,6 +62,18 @@ public sealed class AgentIdentity : IDisposable
         return new AgentIdentity(key, ecdsa, certificate, created);
     }
 
+    /// <summary>
+    /// Deletes the machine key, so the next <see cref="LoadOrCreate"/> makes a new key pair (new fingerprint).
+    /// Used after the server revoked the old key (a revoked key stays refused forever).
+    /// </summary>
+    public static void DeleteKey()
+    {
+        var provider = CngProvider.MicrosoftSoftwareKeyStorageProvider;
+        if (!CngKey.Exists(KeyName, provider, CngKeyOpenOptions.MachineKey)) return;
+        using var key = CngKey.Open(KeyName, provider, CngKeyOpenOptions.MachineKey);
+        key.Delete();
+    }
+
     private static X509Certificate2? LoadCachedCertificate(AgentSettingsStore settings, ECDsa ecdsa)
     {
         try

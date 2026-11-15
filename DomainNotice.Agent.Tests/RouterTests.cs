@@ -314,9 +314,9 @@ public sealed class RouterTests
         await router.OnServerShowAsync(MakeShow(@"CORP\alice"), Ct);
         await router.OnServerShowAsync(MakeShow(@"CORP\bob"), Ct);
 
-        Assert.Equal(0, router.OnUserLoggedOff(@"CORP\alice")); // still connected
-        router.OnSessionDisconnected(alice);
+        // The pipe of the logged-off session may still look connected; WTS decides.
         Assert.Equal(1, router.OnUserLoggedOff(@"corp\alice"));
+        Assert.Equal(0, router.OnUserLoggedOff(@"CORP\alice"));
         Assert.Equal(1, router.PendingCount);
     }
 

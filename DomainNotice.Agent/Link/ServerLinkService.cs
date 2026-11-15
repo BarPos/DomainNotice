@@ -41,6 +41,7 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
     private readonly ExponentialBackoff _backoff = new(TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(5));
 
     private AgentIdentity? _identity;
+    private bool _reKeyPending;
     private volatile FrameConnection? _link;
     private string _downMessage = "Connecting to the server";
     private TimeSpan? _delayOverride;
@@ -165,18 +166,32 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
             return NotConfiguredRetry;
         }
 
+        if (_reKeyPending)
+        {
+            ApplyReKey();
+            settings = SafeLoad();
+        }
+
         if (_identity is null)
         {
-            _identity = AgentIdentity.LoadOrCreate(_settings);
-            _events.LogInformation("Agent key {Action}; fingerprint {Fingerprint}.", _identity.KeyCreated ? "created" : "loaded", KeyFingerprint.Display(_identity.Fingerprint));
             try
             {
-                _settings.ProtectInstallPassword(alreadyEnrolled: settings.ComputerId is not null);
+                _settings.ProtectInstallPassword();
             }
             catch (Exception ex)
             {
                 _logger.LogError("Protecting the install password failed: {Error}", ex.Message);
             }
+
+            if (_settings.ReenrolRequested())
+            {
+                _events.LogWarning("Re-enrolment requested by an administrator: creating a new agent key.");
+                ApplyReKey();
+                settings = SafeLoad();
+            }
+
+            _identity = AgentIdentity.LoadOrCreate(_settings);
+            _events.LogInformation("Agent key {Action}; fingerprint {Fingerprint}.", _identity.KeyCreated ? "created" : "loaded", KeyFingerprint.Display(_identity.Fingerprint));
         }
 
         var host = settings.ServerHost!;
@@ -309,9 +324,16 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
                 _downMessage = "Not enrolled";
                 ReportConnectionError($"Server {settings.ServerHost} refused this agent as unknown{detail}.");
                 return SafeHasPassword() ? EnrolRejectedRetry : SlowRetry;
+            case RefusedReasons.Revoked when SafeHasPassword():
+                // A revoked key stays refused forever; with an install password we can come back under a new key.
+                _downMessage = "Enrolling again with a new key";
+                ReportConnectionError($"Server {settings.ServerHost}: this agent's key is revoked{detail}; creating a new key and enrolling again.");
+                ReKey();
+                return ReEnrolDelay;
             case RefusedReasons.Revoked:
                 _downMessage = "This computer was revoked on the server";
-                ReportConnectionError($"Server {settings.ServerHost}: this computer is revoked{detail}.");
+                ReportConnectionError($"Server {settings.ServerHost}: this agent's key is revoked{detail}. To enrol again, reinstall with " +
+                                      "INSTALLPASSWORD (or run DomainNotice.Agent.exe --reenrol when the server does not require a password).");
                 return SlowRetry;
             case RefusedReasons.Replaced:
                 _downMessage = "This computer was replaced on the server";
@@ -325,6 +347,32 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
                 _downMessage = "Refused by the server";
                 ReportConnectionError($"Server {settings.ServerHost} refused the connection: {refused.Reason}{detail}.");
                 return _backoff.Next();
+        }
+    }
+
+    /// <summary>
+    /// Drops the current key and enrolment; the next attempt creates a new key pair and sends Enroll. Called from
+    /// the read loop it only marks the request; the key is replaced at the start of the next attempt, after the
+    /// connection that uses the old certificate is gone.
+    /// </summary>
+    private void ReKey()
+    {
+        _reKeyPending = true;
+    }
+
+    private void ApplyReKey()
+    {
+        _reKeyPending = false;
+        try
+        {
+            _identity?.Dispose();
+            _identity = null;
+            AgentIdentity.DeleteKey();
+            _settings.ClearEnrolment();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("Re-keying failed: {Error}", ex.Message);
         }
     }
 

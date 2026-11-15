@@ -9,7 +9,9 @@ namespace DomainNotice.Agent.Sessions;
 /// <summary>Starts DomainNotice.Agent.Session.exe in a user session (plan 5.2) and finds running instances.</summary>
 internal static class SessionUiLauncher
 {
-    public static string ExecutablePath => Path.Combine(AppContext.BaseDirectory, LocalPipe.SessionExeName);
+    public static string ExecutablePath => Path.Combine(SessionFolder, LocalPipe.SessionExeName);
+
+    private static string SessionFolder => Path.Combine(AppContext.BaseDirectory, LocalPipe.SessionSubfolder);
 
     private static string ProcessName => Path.GetFileNameWithoutExtension(LocalPipe.SessionExeName);
 
@@ -39,7 +41,7 @@ internal static class SessionUiLauncher
             var commandLine = new StringBuilder($"\"{exe}\"");
             if (!NativeMethods.CreateProcessAsUser(
                     token, exe, commandLine, IntPtr.Zero, IntPtr.Zero, inheritHandles: false,
-                    NativeMethods.CreateUnicodeEnvironment, environment, AppContext.BaseDirectory,
+                    NativeMethods.CreateUnicodeEnvironment, environment, SessionFolder,
                     ref startup, out var info))
                 throw NativeMethods.LastError("CreateProcessAsUser");
 
