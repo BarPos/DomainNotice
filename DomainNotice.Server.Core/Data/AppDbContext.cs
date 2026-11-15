@@ -6,8 +6,6 @@ namespace DomainNotice.Server.Data;
 /// <summary>
 /// The single DbContext. Migrations live in DomainNotice.Server/Data/Migrations (plan 10). Only the integrator
 /// creates migrations; feature areas must not run `dotnet ef migrations add`.
-/// Areas may add <see cref="IEntityTypeConfiguration{TEntity}"/> classes for their own extra mapping; they are
-/// picked up by ApplyConfigurationsFromAssembly.
 /// </summary>
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
@@ -286,7 +284,5 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.RequestedBy).HasMaxLength(255);
             e.Property(x => x.State).HasConversion<string>().HasMaxLength(32);
         });
-
-        b.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
     }
 }
