@@ -2,7 +2,7 @@
     <!--
       Unit tests for the platform-neutral agent logic. Targets plain net10.0 so it runs on macOS/Linux:
       it compiles DomainNotice.Agent/Logic/*.cs directly instead of referencing the net10.0-windows project.
-      Deliberately NOT in DomainNotice.sln (run: dotnet test --project DomainNotice.Agent.Tests).
+      Deliberately NOT in DomainNotice.sln (run it with: dotnet test, passing this project).
     -->
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
