@@ -72,6 +72,7 @@ public class EndToEndTests(PostgresFixture pg)
         var (env, result) = await agent.ReceiveEnvelopeAsync<ConfirmResult>(TimeSpan.FromSeconds(10), Ct);
         Assert.True(result.Accepted, result.Error);
         Assert.Equal(confirmId, env.ReplyTo);
+        Assert.Equal(show.DeliveryId, result.DeliveryId); // the Windows agent matches on either
 
         await using (var ctx = db.CreateContext())
         {
@@ -154,5 +155,65 @@ public class EndToEndTests(PostgresFixture pg)
         await using var ctx = db.CreateContext();
         Assert.Equal(0, await ctx.Confirmations.CountAsync(Ct));
         Assert.Null((await ctx.Deliveries.SingleAsync(d => d.Id == showA.DeliveryId, Ct)).ShownAtUtc);
+    }
+
+    [Fact]
+    public async Task Agent_package_streams_over_the_real_link_and_resumes()
+    {
+        var db = await pg.CreateDatabaseAsync();
+        await using var server = await TestAgentServer.StartAsync(db, fullCore: true);
+
+        // P13 import of a fake MSI (OLE signature + data): 2.5 chunks.
+        var msi = new byte[ProtocolInfo.ChunkSize * 2 + ProtocolInfo.ChunkSize / 2];
+        Random.Shared.NextBytes(msi);
+        new byte[] { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 }.CopyTo(msi, 0);
+        var cache = server.Get<IAgentPackageCache>();
+        var imported = await cache.ImportAsync(new MemoryStream(msi), "DomainNotice.Agent.msi", "tester", Ct);
+        Assert.True(imported.Ok, imported.Error);
+        var package = (await cache.GetCurrentAsync(Ct))!;
+
+        var (agent, computerId) = await server.ConnectEnrolledAsync("PC-UPD", []);
+        await using var _ = agent;
+
+        // No agent is outdated at 1.0.0, so put a sent task in place directly (the transfer path is what is tested).
+        var taskId = Guid.NewGuid();
+        await using (var ctx = db.CreateContext())
+        {
+            ctx.AgentUpdateTasks.Add(new AgentUpdateTask
+            {
+                Id = taskId, ComputerId = computerId, FromVersion = "0.9.0", ToVersion = AppVersion.Current,
+                RequestedBy = "tester", State = AgentUpdateState.Sent, CreatedAtUtc = DateTime.UtcNow,
+                SentAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow,
+            });
+            await ctx.SaveChangesAsync(Ct);
+        }
+
+        await agent.SendAsync(new PackageRequest { TaskId = taskId, Offset = 0 }, ct: Ct);
+        var first = await agent.ReceiveChunkAsync(TimeSpan.FromSeconds(30), Ct);
+        Assert.Equal(taskId, first.TransferId);
+        Assert.Equal(0, first.Offset);
+
+        // Resume from the second chunk, as after a dropped link; the reader keeps working meanwhile (Ping).
+        await agent.SendAsync(new PackageRequest { TaskId = taskId, Offset = ProtocolInfo.ChunkSize }, ct: Ct);
+        await agent.PingAsync(TimeSpan.FromSeconds(10));
+        var received = new SortedDictionary<long, byte[]>();
+        received[first.Offset] = first.Data.ToArray();
+        var deadline = DateTime.UtcNow.AddSeconds(60);
+        while (received.Keys.Sum(k => (long)received[k].Length) < msi.Length || !received.ContainsKey(ProtocolInfo.ChunkSize * 2))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "package not received in time");
+            var chunk = await agent.ReceiveChunkAsync(TimeSpan.FromSeconds(30), Ct);
+            received[chunk.Offset] = chunk.Data.ToArray();
+        }
+        var assembled = received.Values.SelectMany(b => b).ToArray();
+        Assert.Equal(msi.Length, assembled.Length);
+        Assert.Equal(package.Sha256, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(assembled)));
+
+        await agent.SendAsync(new UpdateStatus { TaskId = taskId, State = AgentUpdateState.Installing }, ct: Ct);
+        await TestAgentServer.WaitUntilAsync(async () =>
+        {
+            await using var ctx = db.CreateContext();
+            return (await ctx.AgentUpdateTasks.SingleAsync(t => t.Id == taskId, Ct)).State == AgentUpdateState.Installing;
+        });
     }
 }
