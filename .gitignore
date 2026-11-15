@@ -10,3 +10,4 @@ artifacts/
 *.user
 TestResults/
 .devdata/
+.claude/
