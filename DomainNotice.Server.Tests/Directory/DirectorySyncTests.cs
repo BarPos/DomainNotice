@@ -141,6 +141,28 @@ public class DirectorySyncTests(PostgresFixture pg)
     }
 
     [Fact]
+    public async Task Parent_and_child_ou_renamed_in_one_incremental()
+    {
+        var ctx = await DirectoryTestContext.CreateAsync(pg);
+        var t = Build();
+        var engine = ctx.Engine(t.Src);
+        Assert.True((await engine.RunAsync(DirectorySyncKind.Full, null, Ct)).Success);
+
+        // Staff → People and Computers → Machines (child of Staff) at once; PC-1 below both is unchanged in AD.
+        const string people = "OU=People,DC=example,DC=local";
+        const string machines = "OU=Machines," + people;
+        t.Src.Update(t.Pcs.ObjectGuid, e => FakeLdapSource.Copy(e, dn: machines, cn: "Machines"));
+        t.Src.Update(t.Staff.ObjectGuid, e => FakeLdapSource.Copy(e, dn: people, cn: "People"));
+        Assert.True((await engine.RunAsync(DirectorySyncKind.Incremental, null, Ct)).Success);
+
+        await using var db = ctx.Db.CreateContext();
+        var pc = await db.DirectoryObjects.SingleAsync(o => o.ObjectGuid == t.Pc1.ObjectGuid, Ct);
+        Assert.Equal("CN=PC-1," + machines, pc.DistinguishedName);
+        var bob = await db.DirectoryObjects.SingleAsync(o => o.ObjectGuid == t.Bob.ObjectGuid, Ct);
+        Assert.Equal("CN=Bob," + people, bob.DistinguishedName);
+    }
+
+    [Fact]
     public async Task Full_sync_marks_missing_objects_deleted_and_drops_their_memberships()
     {
         var ctx = await DirectoryTestContext.CreateAsync(pg);

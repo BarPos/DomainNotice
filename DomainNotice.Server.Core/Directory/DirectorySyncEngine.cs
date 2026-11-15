@@ -169,7 +169,9 @@ internal sealed class DirectorySyncEngine(
         await db.SaveChangesAsync(ct);
 
         // Descendants of a renamed/moved OU keep their uSNChanged, so an incremental sync does not return them.
-        foreach (var (oldDn, newDn) in renamedContainers)
+        // Deepest first: if a parent and a child OU are both renamed, the child's rewrite must happen before the
+        // parent's rewrite changes the child's descendants' suffix.
+        foreach (var (oldDn, newDn) in renamedContainers.OrderByDescending(r => DistinguishedNames.Split(r.OldDn).Count))
             changed += await RewriteDescendantsAsync(db, oldDn, newDn, entries.Keys, nowUtc, ct);
 
         // DN → GUID of every live object, after this run's changes.

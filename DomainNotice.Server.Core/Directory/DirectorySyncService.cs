@@ -43,6 +43,7 @@ internal sealed class DirectorySyncService(
     ILogger<DirectorySyncService> logger) : BackgroundService
 {
     public const string DefaultCron = "0 2 * * *";
+    private static readonly TimeSpan MaxWait = TimeSpan.FromHours(1);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -148,7 +149,8 @@ internal sealed class DirectorySyncService(
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var read = coordinator.Requests.WaitToReadAsync(cts.Token).AsTask();
         var tasks = new List<Task> { read };
-        if (timeout is { } t) tasks.Add(Task.Delay(t < TimeSpan.Zero ? TimeSpan.Zero : t, time, cts.Token));
+        // Capped: Task.Delay rejects very long delays (~49 days), and the loop re-evaluates anyway.
+        if (timeout is { } t) tasks.Add(Task.Delay(t < TimeSpan.Zero ? TimeSpan.Zero : t > MaxWait ? MaxWait : t, time, cts.Token));
         var done = await Task.WhenAny(tasks);
         await cts.CancelAsync();
         ct.ThrowIfCancellationRequested();
