@@ -20,7 +20,7 @@ namespace DomainNotice.Agent.Link;
 /// </summary>
 public sealed class ServerLinkService : BackgroundService, IServerSender
 {
-    public const string ServerOlderMessage = "The server is older than this agent";
+    public const string ServerOlderMessage = LocalStatusMessages.ServerOlder;
 
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(60);

@@ -33,6 +33,13 @@ public static class LocalPipe
     public const string SessionExeName = "DomainNotice.Agent.Session.exe";
 }
 
+/// <summary>Fixed status texts the Session UI recognises (icon colour).</summary>
+public static class LocalStatusMessages
+{
+    /// <summary>Welcome{compatible:false}: the agent is newer than the server (plan 11.1).</summary>
+    public const string ServerOlder = "The server is older than this agent";
+}
+
 // ---- service -> session ------------------------------------------------------------------------
 
 /// <summary>Show (or keep showing) an announcement. Sent again after a reconnect; the UI dedupes by DeliveryId.</summary>
