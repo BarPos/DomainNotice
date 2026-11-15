@@ -363,6 +363,8 @@ public sealed class TestAgentServer : IAsyncDisposable
         if (fullCore)
         {
             builder.Services.AddDomainNoticeCore(config, builder.Environment);
+            // Keep Data Protection keys in memory (the Testing environment does not persist them).
+            builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
         }
         else
         {

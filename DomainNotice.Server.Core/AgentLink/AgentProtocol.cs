@@ -217,11 +217,11 @@ internal sealed class AgentProtocol(
             {
                 try { await worker; } catch (Exception ex) { logger.LogDebug(ex, "Worker of {Conn} ended with an error", conn); }
             }
-            if (phase == Phase.Online)
+            if (conn.HelloApplied)
             {
                 try
                 {
-                    if (await inventory.MarkOfflineAsync(hub, conn, CancellationToken.None))
+                    if (await inventory.MarkOfflineAsync(hub, conn, CancellationToken.None) && conn.IsOnline)
                     {
                         logger.LogInformation("Computer {Computer} offline", conn.ComputerId);
                         await observers.OfflineAsync(conn.ComputerId, CancellationToken.None);
@@ -300,6 +300,7 @@ internal sealed class AgentProtocol(
                 await conn.CloseAsync(reason);
                 return false;
             }
+            conn.HelloApplied = true;
             var spn = directoryOptions.Value.KerberosServicePrincipal;
             await conn.SendAsync(new Welcome
             {

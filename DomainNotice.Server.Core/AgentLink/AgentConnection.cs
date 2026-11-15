@@ -55,6 +55,8 @@ internal sealed class AgentConnection : IAgentConnection, IAsyncDisposable
 
     /// <summary>Hello accepted; registered in the hub.</summary>
     public bool IsOnline { get; internal set; }
+    /// <summary>Hello was written to the inventory (Online = true), even if Welcome or registration then failed.</summary>
+    public bool HelloApplied { get; internal set; }
     public bool IsClosing => Volatile.Read(ref _closing) != 0;
     public CancellationToken Aborted => _cts.Token;
     public DateTime LastActivityUtc => new(Interlocked.Read(ref _lastActivityTicks), DateTimeKind.Utc);

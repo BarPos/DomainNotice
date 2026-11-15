@@ -61,12 +61,34 @@ public class KerberosProofTests(PostgresFixture pg)
         Assert.Equal(aes256, Key(EncryptionType.AES256_CTS_HMAC_SHA1_96));
     }
 
+    [Theory]
+    // RFC 1320 appendix A.5.
+    [InlineData("", "31d6cfe0d16ae931b73c59d7e0c089c0")]
+    [InlineData("a", "bde52cb31de33e46245e05fbdbd6fb24")]
+    [InlineData("abc", "a448017aaf21d8525fc10ae87aa6729d")]
+    [InlineData("message digest", "d9130a8164549fe818874806e1c7014b")]
+    [InlineData("12345678901234567890123456789012345678901234567890123456789012345678901234567890", "e33b4ddc9c38f2199c3e7b164fcc0536")]
+    public void Md4_matches_rfc1320(string input, string hex) =>
+        Assert.Equal(hex, Convert.ToHexStringLower(Md4.Hash(System.Text.Encoding.ASCII.GetBytes(input))));
+
     [Fact]
-    public void No_rc4_key_is_derived()
+    public void Rc4_key_is_the_nt_hash()
     {
-        // MD4 (needed for the RC4 key) does not exist in .NET on Linux/macOS; AES only.
-        Assert.All(KerberosProofValidator.DeriveKeys("password", Realm, ["user"]),
-            k => Assert.NotEqual(EncryptionType.RC4_HMAC_NT, k.EncryptionType));
+        var keys = KerberosProofValidator.DeriveKeys("password", Realm, ["user"]);
+        var rc4 = keys.Single(k => k.EncryptionType == EncryptionType.RC4_HMAC_NT);
+        Assert.Equal("8846f7eaee8fb117ad06bdd830b7586c",
+            Convert.ToHexStringLower(rc4.GetKey(CryptoService.CreateTransform(EncryptionType.RC4_HMAC_NT)).Span));
+    }
+
+    [Fact]
+    public void Ticket_with_an_encryption_type_without_key_names_the_prerequisite()
+    {
+        var des = KerberosProofValidator.DeriveKeys(BindPassword, Realm, ["svc-domainnotice"])
+            .Where(k => k.EncryptionType != EncryptionType.AES128_CTS_HMAC_SHA1_96).ToList();
+        var token = new KerberosTokenBuilder { ServiceKey = ServiceKey(EncryptionType.AES128_CTS_HMAC_SHA1_96), ChannelBinding = ServerBinding }.Build();
+        var result = Validator().Validate(token, des, Realm, Spn, ServerBinding);
+        Assert.False(result.Ok);
+        Assert.Contains("msDS-SupportedEncryptionTypes", result.Error);
     }
 
     [Fact]
@@ -99,6 +121,7 @@ public class KerberosProofTests(PostgresFixture pg)
     [Theory]
     [InlineData(EncryptionType.AES256_CTS_HMAC_SHA1_96)]
     [InlineData(EncryptionType.AES128_CTS_HMAC_SHA1_96)]
+    [InlineData(EncryptionType.RC4_HMAC_NT)]
     public void Valid_bound_token_names_the_computer(EncryptionType etype)
     {
         var token = new KerberosTokenBuilder { ServiceKey = ServiceKey(etype), ChannelBinding = ServerBinding }.Build();
@@ -322,5 +345,8 @@ public class KerberosProofTests(PostgresFixture pg)
         Assert.Equal("svc-DomainNotice", (await validator.BindAccountNamesAsync("CN=DomainNotice Service,OU=Svc,DC=example,DC=local", Ct))[0]);
         Assert.Equal(["svc-DomainNotice", "DN-Service"], await validator.BindAccountNamesAsync("DN-Service@example.local", Ct));
         Assert.Equal(["svc"], await validator.BindAccountNamesAsync(@"EXAMPLE\svc", Ct));
+        // The stored spelling wins (the AES salt is case-sensitive).
+        Assert.Equal(["svc-DomainNotice", "SVC-domainnotice"], await validator.BindAccountNamesAsync(@"EXAMPLE\SVC-domainnotice", Ct));
+        Assert.Equal(["svc-DomainNotice"], await validator.BindAccountNamesAsync("svc-domainnotice", Ct).ContinueWith(t => t.Result.Take(1).ToList()));
     }
 }

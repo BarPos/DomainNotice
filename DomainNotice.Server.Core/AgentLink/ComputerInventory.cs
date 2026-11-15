@@ -189,14 +189,15 @@ internal sealed class ComputerInventory(IDbContextFactory<AppDbContext> dbFactor
     }
 
     /// <summary>
-    /// Marks the computer offline if <paramref name="conn"/> is still its registered connection: sessions removed,
-    /// open logon history closed with LogoffAtUtc = last seen, Online = false. Returns false when another
-    /// connection took over (nothing changed).
+    /// Marks the computer offline if <paramref name="conn"/> is still its registered connection (or, when its
+    /// Hello was written but it never got registered, if no other connection is): sessions removed, open logon
+    /// history closed with LogoffAtUtc = last seen, Online = false. Returns false when another connection took over
+    /// (nothing changed).
     /// </summary>
     public async Task<bool> MarkOfflineAsync(AgentHub hub, AgentConnection conn, CancellationToken ct)
     {
         using var _ = await hub.LockAsync(conn.ComputerId, ct);
-        if (!hub.TryRemove(conn)) return false;
+        if (!hub.TryRemove(conn) && hub.Get(conn.ComputerId) is not null) return false;
         var lastSeen = conn.LastActivityUtc;
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var computer = await db.Computers.FirstOrDefaultAsync(c => c.Id == conn.ComputerId, ct);

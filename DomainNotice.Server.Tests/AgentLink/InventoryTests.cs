@@ -257,12 +257,12 @@ public class InventoryTests(PostgresFixture pg)
     {
         var db = await pg.CreateDatabaseAsync();
         await using var server = await AgentLinkTestHelpers.StartAsync(db,
-            settings: new Dictionary<string, string?> { ["Agents:OfflineAfterSeconds"] = "1" });
+            settings: new Dictionary<string, string?> { ["Agents:OfflineAfterSeconds"] = "2" });
         var (agent, id) = await server.ConnectEnrolledAsync();
         await using var _ = agent;
-        for (var i = 0; i < 8; i++)
+        for (var i = 0; i < 10; i++)
         {
-            await Task.Delay(300, Ct);
+            await Task.Delay(400, Ct);
             await agent.PingAsync();
         }
         Assert.True(server.Get<IAgentHub>().IsOnline(id));

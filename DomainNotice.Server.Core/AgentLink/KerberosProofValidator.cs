@@ -88,8 +88,13 @@ internal sealed class KerberosProofValidator(
         if (!string.Equals(apReq.Ticket!.Realm, realm, StringComparison.OrdinalIgnoreCase))
             return KerberosProofResult.Fail($"The ticket is not from realm {realm}.");
 
+        var etype = apReq.Ticket.EncryptedPart.EType;
+        var candidates = keys.Where(k => k.EncryptionType == etype).ToList();
+        if (candidates.Count == 0)
+            return KerberosProofResult.Fail($"The ticket uses encryption type {etype}, which the server has no key for. "
+                + "Allow AES on the bind account (msDS-SupportedEncryptionTypes = 0x18).");
         DecryptedKrbApReq? decrypted = null;
-        foreach (var key in keys.Where(k => k.EncryptionType == apReq.Ticket.EncryptedPart.EType))
+        foreach (var key in candidates)
         {
             var attempt = new DecryptedKrbApReq(apReq, MessageType.KRB_AP_REQ)
             {
@@ -220,8 +225,8 @@ internal sealed class KerberosProofValidator(
 
     /// <summary>
     /// Keys of the bind account: AES256 and AES128 with the AD user salt REALM + sAMAccountName (one pair per
-    /// candidate account name). RC4 is not offered: Kerberos.NET needs MD4 for the RC4 key, which .NET does not
-    /// provide on Linux/macOS, so the bind account must allow AES tickets (msDS-SupportedEncryptionTypes 0x18).
+    /// candidate account name), plus RC4-HMAC (NT hash, no salt). Kerberos.NET would derive the RC4 key with MD4,
+    /// which .NET lacks on Linux/macOS, so the NT hash is computed here (<see cref="Md4"/>) and passed as a raw key.
     /// The AD salt convention is not verified against a real domain.
     /// </summary>
     internal static IReadOnlyList<KerberosKey> DeriveKeys(string password, string realm, IEnumerable<string> userNames)
@@ -234,6 +239,9 @@ internal sealed class KerberosProofValidator(
             foreach (var etype in new[] { EncryptionType.AES256_CTS_HMAC_SHA1_96, EncryptionType.AES128_CTS_HMAC_SHA1_96 })
                 keys.Add(new KerberosKey(password, principal, salt: upperRealm + user, etype: etype));
         }
+        var ntHash = Md4.Hash(System.Text.Encoding.Unicode.GetBytes(password));
+        keys.Add(new KerberosKey(ntHash, null, new PrincipalName(PrincipalNameType.NT_PRINCIPAL, upperRealm, [userNames.FirstOrDefault() ?? "bind"]),
+            null, null, null, EncryptionType.RC4_HMAC_NT, SaltType.ActiveDirectoryUser, null, null));
         return keys;
     }
 
@@ -248,7 +256,8 @@ internal sealed class KerberosProofValidator(
 
     /// <summary>
     /// Candidate sAMAccountNames of Directory:BindUser, which may be DOMAIN\user, user@domain, a DN or a bare name.
-    /// For a DN or UPN the synced directory is asked for the real sAMAccountName.
+    /// The AES salt is case-sensitive and LDAP binds are not, so the synced directory is asked for the stored
+    /// spelling of sAMAccountName (by DN, UPN or sAMAccountName); that spelling comes first, the typed one after.
     /// </summary>
     internal async Task<IReadOnlyList<string>> BindAccountNamesAsync(string bindUser, CancellationToken ct)
     {
@@ -267,24 +276,28 @@ internal sealed class KerberosProofValidator(
         else
             names.Add(user);
 
-        if (dn is not null || upn is not null)
+        try
         {
-            try
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var dnLower = dn?.ToLowerInvariant();
+            var upnLower = upn?.ToLowerInvariant();
+            var samLower = names.Count > 0 ? names[0].ToLowerInvariant() : null;
+            var stored = await db.DirectoryObjects.AsNoTracking()
+                .Where(o => o.Kind == DirectoryObjectKind.User && !o.Deleted
+                            && ((dnLower != null && o.DistinguishedNameLower == dnLower)
+                                || (upnLower != null && o.UserPrincipalName != null && o.UserPrincipalName.ToLower() == upnLower)
+                                || (samLower != null && o.SamAccountNameLower == samLower)))
+                .OrderBy(o => o.DistinguishedNameLower == dnLower ? 0 : o.UserPrincipalName != null && o.UserPrincipalName.ToLower() == upnLower ? 1 : 2)
+                .Select(o => o.SamAccountName).FirstOrDefaultAsync(ct);
+            if (!string.IsNullOrEmpty(stored))
             {
-                await using var db = await dbFactory.CreateDbContextAsync(ct);
-                var dnLower = dn?.ToLowerInvariant();
-                var upnLower = upn?.ToLowerInvariant();
-                var sam = await db.DirectoryObjects.AsNoTracking()
-                    .Where(o => o.Kind == DirectoryObjectKind.User && !o.Deleted
-                                && ((dnLower != null && o.DistinguishedNameLower == dnLower)
-                                    || (upnLower != null && o.UserPrincipalName != null && o.UserPrincipalName.ToLower() == upnLower)))
-                    .Select(o => o.SamAccountName).FirstOrDefaultAsync(ct);
-                if (!string.IsNullOrEmpty(sam)) names.Insert(0, sam);
+                names.Remove(stored);
+                names.Insert(0, stored);
             }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Bind account lookup in the synced directory failed");
-            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Bind account lookup in the synced directory failed");
         }
         if (names.Count == 0 && dn is not null)
         {

@@ -97,6 +97,20 @@ public class AgentListenerTlsTests(PostgresFixture pg)
     }
 
     [Fact]
+    public async Task Full_core_registration_runs_the_agent_link()
+    {
+        var db = await pg.CreateDatabaseAsync();
+        await using var server = await TestAgentServer.StartAsync(db, fullCore: true);
+        var (agent, id) = await server.ConnectEnrolledAsync("PC-FULL");
+        await using var _ = agent;
+        await agent.PingAsync();
+        Assert.True(server.Get<DomainNotice.Server.Abstractions.IAgentHub>().IsOnline(id));
+        Assert.NotNull(server.Get<DomainNotice.Server.Abstractions.IComputerAdminService>());
+        Assert.NotNull(server.Get<DomainNotice.Server.Abstractions.IEnrolmentAdmin>());
+        Assert.NotNull(server.Get<DomainNotice.Server.Abstractions.IAgentEvents>());
+    }
+
+    [Fact]
     public async Task Client_refuses_a_server_with_another_fingerprint()
     {
         var db = await pg.CreateDatabaseAsync();
