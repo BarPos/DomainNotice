@@ -45,8 +45,10 @@ internal sealed class ServerInstallation : IServerInstallation
         if (Architecture is null) return (false, $"Unsupported CPU architecture {RuntimeInformation.OSArchitecture}.");
         if (!IsUbuntu2404OrNewer()) return (false, "Self-update needs Ubuntu 24.04 LTS or newer.");
         var releases = Path.Combine(InstallRoot, "releases") + Path.DirectorySeparatorChar;
+        var currentDir = Path.Combine(InstallRoot, "current") + Path.DirectorySeparatorChar;
         var baseDir = Path.GetFullPath(AppContext.BaseDirectory);
-        if (!baseDir.StartsWith(releases, StringComparison.Ordinal))
+        // The apphost normally resolves the symlink (releases/<v>/), but accept current/ too.
+        if (!baseDir.StartsWith(releases, StringComparison.Ordinal) && !baseDir.StartsWith(currentDir, StringComparison.Ordinal))
             return (false, $"The server does not run from {releases} (not installed with install.sh).");
         string? linkTarget;
         try { linkTarget = new FileInfo(Path.Combine(InstallRoot, "current")).LinkTarget; }
