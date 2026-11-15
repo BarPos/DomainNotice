@@ -248,9 +248,11 @@ internal sealed class AnnouncementService(
             if (found is null) return (OperationResult.Fail("That announcement no longer exists."), null);
             a = found;
 
+            // Plan 8.4: once a window was sent, its promise (anonymous or named) must hold for every answer to it.
             if (a.AnonymousAnswers != model.AnonymousAnswers
-                && await db.Confirmations.AnyAsync(c => c.AnnouncementId == a.Id, ct))
-                return (OperationResult.Fail("Anonymous answers cannot be switched on or off after people have confirmed."), null);
+                && (await db.Deliveries.AnyAsync(d => d.AnnouncementId == a.Id, ct)
+                    || await db.Confirmations.AnyAsync(c => c.AnnouncementId == a.Id, ct)))
+                return (OperationResult.Fail("Anonymous answers cannot be switched on or off after the announcement was sent."), null);
         }
 
         a.Title = model.Title.Trim();

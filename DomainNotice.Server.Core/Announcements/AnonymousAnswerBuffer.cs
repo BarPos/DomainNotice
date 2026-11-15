@@ -108,9 +108,38 @@ internal sealed class AnonymousAnswerBuffer(IDbContextFactory<AppDbContext> dbFa
 }
 
 /// <summary>Flushes the anonymous answer buffer every AnonymousAnswers:FlushMinutes and on shutdown.</summary>
-internal sealed class AnonymousAnswerFlusher(AnonymousAnswerBuffer buffer, IOptions<AnonymousAnswersOptions> options,
-    TimeProvider time, ILogger<AnonymousAnswerFlusher> logger) : BackgroundService
+internal sealed class AnonymousAnswerFlusher : BackgroundService
 {
+    private readonly AnonymousAnswerBuffer buffer;
+    private readonly IOptions<AnonymousAnswersOptions> options;
+    private readonly TimeProvider time;
+    private readonly ILogger<AnonymousAnswerFlusher> logger;
+
+    public AnonymousAnswerFlusher(AnonymousAnswerBuffer buffer, IOptions<AnonymousAnswersOptions> options, TimeProvider time,
+        ILogger<AnonymousAnswerFlusher> logger, IHostApplicationLifetime? lifetime = null)
+    {
+        this.buffer = buffer;
+        this.options = options;
+        this.time = time;
+        this.logger = logger;
+        // Hosted services stop in reverse registration order, so the agent link (registered earlier) may still accept
+        // Confirms after StopAsync below. One last flush once everything has stopped catches those.
+        lifetime?.ApplicationStopped.Register(FinalFlush);
+    }
+
+    private void FinalFlush()
+    {
+        try
+        {
+            var written = buffer.FlushAsync(CancellationToken.None).GetAwaiter().GetResult();
+            if (written > 0) logger.LogInformation("Wrote {Count} anonymous answer sets after shutdown", written);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Anonymous answers could not be written after shutdown and are lost");
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var minutes = Math.Max(1, options.Value.FlushMinutes);

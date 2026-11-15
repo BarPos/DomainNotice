@@ -21,6 +21,7 @@ public static class ConfirmErrors
     public const string RequiredMissing = "A required question was not answered.";
     public const string TooEarly = "The announcement cannot be dismissed yet.";
     public const string DisplayLimit = "This announcement was already confirmed as often as allowed.";
+    public const string ServerError = "The server could not store the confirmation. Please try again.";
 }
 
 /// <summary>
@@ -66,7 +67,18 @@ internal sealed class ConfirmationHandler(
         var computerId = connection.ComputerId;
         using (await coordinator.LockComputerAsync(computerId, ct))
         {
-            var (accepted, error, delivery) = await ConfirmLockedAsync(computerId, confirm, ct);
+            bool accepted;
+            string? error;
+            Delivery? delivery;
+            try
+            {
+                (accepted, error, delivery) = await ConfirmLockedAsync(computerId, confirm, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogError(ex, "Confirm {DeliveryId} from {ComputerId} failed", confirm.DeliveryId, computerId);
+                (accepted, error, delivery) = (false, ConfirmErrors.ServerError, null);
+            }
             await connection.SendAsync(new ConfirmResult { DeliveryId = confirm.DeliveryId, Accepted = accepted, Error = error },
                 envelope.Id, ct);
             if (!accepted || delivery is null) return;

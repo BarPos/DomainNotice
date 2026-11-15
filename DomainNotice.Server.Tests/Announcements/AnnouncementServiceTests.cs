@@ -218,6 +218,24 @@ public class AnnouncementServiceTests(PostgresFixture pg)
     }
 
     [Fact]
+    public async Task Anonymous_flag_cannot_change_once_a_window_was_sent()
+    {
+        await using var h = await AnnouncementHarness.CreateAsync(pg);
+        var pc = await h.AddComputerAsync("PC1");
+        var m = AnnouncementHarness.Model();
+        m.AnonymousAnswers = true;
+        var id = await h.SaveAsync(m);
+        var conn = await h.OnlineAsync(pc, @"CORP\alice");
+        Assert.Single(conn.SentOf<Show>());
+
+        var edit = (await h.Service.GetForEditAsync(id, h.Ct))!;
+        edit.AnonymousAnswers = false;
+        var (r, _) = await h.Service.SaveAsync(edit, "t", h.Ct);
+        Assert.False(r.Ok);
+        Assert.True((await h.LoadAnnouncementAsync(id)).AnonymousAnswers);
+    }
+
+    [Fact]
     public async Task Status_follows_draft_and_time()
     {
         await using var h = await AnnouncementHarness.CreateAsync(pg);
