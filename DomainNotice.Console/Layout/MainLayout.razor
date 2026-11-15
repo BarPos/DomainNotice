@@ -25,7 +25,7 @@
         </div>
         <MudSpacer />
         <MudTooltip Text="@(_dark ? "Light theme" : "Dark theme")">
-            <MudIconButton Icon="@(_dark ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)" Color="Color.Inherit" OnClick="ToggleThemeAsync" />
+            <MudIconButton Icon="@(_dark ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)" Color="Color.Inherit" OnClick="ToggleThemeAsync" aria-label="Toggle light or dark theme" />
         </MudTooltip>
         <AuthorizeView>
             <Authorized>

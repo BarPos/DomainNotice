@@ -4,7 +4,13 @@ using DomainNotice.Console.Endpoints;
 using DomainNotice.Server.Tests.Infrastructure;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using DomainNotice.Server.Abstractions;
+using DomainNotice.Server.Common;
+using DomainNotice.Server.Data;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace DomainNotice.Server.Tests.Console;
 
@@ -28,6 +34,34 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
             builder.UseSetting("Paths:Data", dataDir);
             builder.UseSetting("Console:DevFakes", "true");
             builder.UseSetting("Console:DevCreateSchema", "true");
+            // Test-owned sign-in, so the P4 (Viewer) checks do not depend on which IAdminSignInService is registered.
+            builder.ConfigureTestServices(s => s.Replace(ServiceDescriptor.Singleton<IAdminSignInService, TestSignInService>()));
+        }
+    }
+
+    /// <summary>Local accounts from the database; names starting with "viewer" get the Viewer role.</summary>
+    private sealed class TestSignInService(IDbContextFactory<AppDbContext> dbFactory) : IAdminSignInService
+    {
+        public bool DomainSignInAvailable => false;
+        public bool LocalSignInEnabled => true;
+
+        public Task<SignInOutcome> SignInDomainAsync(string userName, string password, string? remoteIp, CancellationToken ct = default) =>
+            Task.FromResult(new SignInOutcome(false));
+
+        public async Task<SignInOutcome> SignInLocalAsync(string userName, string password, string? remoteIp, CancellationToken ct = default)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var normalized = userName.Trim().ToLowerInvariant();
+            var account = await db.LocalAccounts.FirstOrDefaultAsync(a => a.NormalizedUserName == normalized, ct);
+            if (account is null || account.Disabled || !PasswordHasher.Verify(password, account.PasswordHash)) return new SignInOutcome(false);
+            return new SignInOutcome(true, account.UserName, account.UserName,
+                normalized.StartsWith("viewer", StringComparison.Ordinal) ? ConsoleRoles.Viewer : ConsoleRoles.Admin, SignInSource.Local);
+        }
+
+        public async Task<bool> IsFirstRunSetupAllowedAsync(CancellationToken ct = default)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            return !await db.LocalAccounts.AnyAsync(ct);
         }
     }
 
@@ -102,8 +136,8 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
         Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/settings", Ct)).StatusCode);
 
         // P4: a Viewer sees no mutating actions, and the server refuses them.
-        var accounts = factory.Services.GetRequiredService<DomainNotice.Server.Abstractions.ILocalAccountService>();
-        Assert.True((await accounts.CreateAsync("viewer1", "Passw0rd!y", "test", Ct)).Ok); // dev fake: "viewer*" = Viewer
+        var accounts = factory.Services.GetRequiredService<ILocalAccountService>();
+        Assert.True((await accounts.CreateAsync("viewer1", "Passw0rd!y", "test", Ct)).Ok); // TestSignInService: "viewer*" = Viewer
         var viewerLogin = await client.GetStringAsync("/account/login", Ct);
         var signedIn = await client.PostAsync("/account/login", Form(viewerLogin, ("source", "local"), ("username", "viewer1"), ("password", "Passw0rd!y")), Ct);
         Assert.Equal("/", signedIn.Headers.Location!.ToString());

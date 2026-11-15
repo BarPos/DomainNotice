@@ -42,7 +42,7 @@
 
     @if (_editorOpen)
     {
-        <FilterEditor Fields="_fields" InitialField="_editorField" OnApply="AddFilter" OnCancel="@(() => _editorOpen = false)" />
+        <FilterEditor @key="@_editorField" Fields="_fields" InitialField="@_editorField" OnApply="AddFilter" OnCancel="@(() => _editorOpen = false)" />
     }
 
     @if (_query.Filters.Count > 0)
@@ -344,9 +344,8 @@
 
     private void OpenEditor(string? field)
     {
+        // @key on the editor recreates it when another column's filter icon is clicked.
         _editorField = field;
-        _editorOpen = false;
-        StateHasChanged();
         _editorOpen = true;
     }
 
