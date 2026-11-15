@@ -174,6 +174,8 @@ public sealed class DirectoryObjectRow
     public bool Enabled { get; init; }
     public bool Deleted { get; init; }
     public DateTime LastSyncedUtc { get; init; }
+    /// <summary>For AD computers: the enrolled computer linked to it, if any.</summary>
+    public Guid? EnrolledComputerId { get; init; }
 }
 
 public static class DnText

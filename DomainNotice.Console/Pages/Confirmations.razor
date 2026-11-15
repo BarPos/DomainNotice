@@ -1,0 +1,17 @@
+@page "/confirmations"
+
+<PageTitle>Confirmations · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudText Typo="Typo.h5">Read confirmations</MudText>
+</div>
+
+<DataGrid TRow="ConfirmationRow" List="ConsoleLists.Confirmations" Cells="_cells" />
+
+@code {
+    private Dictionary<string, RenderFragment<ConfirmationRow>> _cells => new()
+    {
+        ["announcement"] = r => @<MudLink Href="@($"/announcements/{r.AnnouncementId}")">@r.AnnouncementTitle</MudLink>,
+        ["computer"] = r => @<MudLink Href="@($"/computers/{r.ComputerId}")">@r.ComputerName</MudLink>,
+    };
+}

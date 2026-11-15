@@ -22,6 +22,7 @@ public static class ConsoleHostingExtensions
     /// <summary>Paths reachable without signing in, besides [AllowAnonymous] endpoints.</summary>
     private static readonly PathString HealthPath = new("/healthz");
 
+
     /// <summary>Registers Razor components, MudBlazor, cookie authentication and authorization.</summary>
     public static IServiceCollection AddDomainNoticeConsole(this IServiceCollection services, IConfiguration config)
     {
@@ -113,15 +114,7 @@ public static class ConsoleHostingExtensions
 
         app.MapStaticAssets().AllowAnonymous();
         app.MapConsoleEndpoints();
-        app.MapRazorComponents<App>().AddInteractiveServerRenderMode()
-            // The framework script is served by an endpoint of MapRazorComponents (not a static asset, because the host
-            // project has no Razor components of its own); the sign-in page needs it before anyone is signed in.
-            .Add(endpoint =>
-            {
-                if (endpoint is Microsoft.AspNetCore.Routing.RouteEndpointBuilder { RoutePattern.RawText: { } raw }
-                    && raw.TrimStart('/').StartsWith("_framework/blazor.", StringComparison.OrdinalIgnoreCase))
-                    endpoint.Metadata.Add(new AllowAnonymousAttribute());
-            });
+        app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
     }
 

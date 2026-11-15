@@ -1,0 +1,171 @@
+@page "/announcements/{Id:guid}"
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IAnnouncementService AnnouncementService
+@inject NavigationManager Nav
+@inject TimeProvider Time
+@inject ConsoleUser Me
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject BrowserClock Clock
+
+<PageTitle>@(_a?.Title ?? "Announcement") · DomainNotice</PageTitle>
+
+@if (_loaded && _a is null)
+{
+    <MudAlert Severity="Severity.Warning">This announcement does not exist. <MudLink Href="/announcements">Back to announcements</MudLink></MudAlert>
+}
+else if (_a is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    var a = _a;
+    <div class="dn-page-title">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Href="/announcements" aria-label="Back to announcements" />
+        <MudText Typo="Typo.h5">@a.Title</MudText>
+        <AnnouncementStatusChip Status="@a.StatusAt(Time.GetUtcNow().UtcDateTime)" />
+        @if (a.AnonymousAnswers)
+        {
+            <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.VisibilityOff">Anonymous answers</MudChip>
+        }
+        <MudSpacer />
+        <MudButton Href="@($"/export/announcements/{a.Id}/confirmations.csv")" download="" StartIcon="@Icons.Material.Filled.Download" Variant="Variant.Text">Confirmations CSV</MudButton>
+        <MudButton Href="@($"/export/announcements/{a.Id}/answers.csv")" download="" StartIcon="@Icons.Material.Filled.Download" Variant="Variant.Text">Answers CSV</MudButton>
+        <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+            <MudButton Href="@($"/announcements/{a.Id}/edit")" StartIcon="@Icons.Material.Filled.Edit" Variant="Variant.Outlined">Edit</MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.Delete" Variant="Variant.Outlined" Color="Color.Error" OnClick="DeleteAsync">Delete</MudButton>
+        </AuthorizeView>
+    </div>
+
+    <MudPaper Outlined="true" Class="pa-4 mb-4">
+        <div class="d-flex flex-wrap gap-8">
+            <div><MudText Typo="Typo.caption">Window</MudText><MudText>@Clock.Format(a.StartUtc) – @Clock.Format(a.EndUtc)</MudText></div>
+            <div><MudText Typo="Typo.caption">Targets</MudText><MudText>@(a.Targets.Count == 0 ? "Everyone" : string.Join(", ", a.Targets.Select(t => t.DisplayName)))</MudText></div>
+            <div><MudText Typo="Typo.caption">Delivered to</MudText><MudText>@_delivered users</MudText></div>
+            <div><MudText Typo="Typo.caption">Confirmed by</MudText><MudText>@_confirmed users</MudText></div>
+            <div style="min-width: 200px">
+                <MudText Typo="Typo.caption">Confirmation rate</MudText>
+                <MudProgressLinear Value="@(_delivered == 0 ? 0 : 100.0 * _confirmed / _delivered)" Color="Color.Success" Rounded="true" Size="Size.Large" Class="mt-2" />
+            </div>
+        </div>
+    </MudPaper>
+
+    <MudTabs Outlined="true" Rounded="true" ActivePanelIndex="Tab" ActivePanelIndexChanged="TabChanged" KeepPanelsAlive="false" TabPanelsClass="pa-4">
+        <MudTabPanel Text="Deliveries">
+            <DataGrid TRow="DeliveryRow" List="ConsoleLists.Deliveries" Prefix="d." Scope="_scope" RowHref="@(r => $"/computers/{r.ComputerId}")" />
+        </MudTabPanel>
+        <MudTabPanel Text="Confirmations">
+            <DataGrid TRow="ConfirmationRow" List="ConsoleLists.Confirmations" Prefix="c." Scope="_scope" />
+        </MudTabPanel>
+        <MudTabPanel Text="Answers">
+            @if (_questions.Count == 0)
+            {
+                <MudText>This announcement has no questions.</MudText>
+            }
+            <div class="dn-tiles mb-4">
+                @foreach (var q in _questions)
+                {
+                    <MudPaper Outlined="true" Class="pa-3">
+                        <MudText Typo="Typo.subtitle2">@q.Prompt @(q.Hidden ? "(hidden)" : "")</MudText>
+                        <MudText Typo="Typo.caption">@q.Total answer(s) · @(q.Kind == QuestionKind.Multiple ? "multiple choice" : "single choice")</MudText>
+                        @if (q.Counts.Count > 0)
+                        {
+                            <MudChart T="double" ChartType="ChartType.Bar" ChartSeries="@q.Series" ChartLabels="@q.Labels" Width="100%" Height="220px" />
+                        }
+                        @foreach (var (label, count) in q.Counts)
+                        {
+                            <div class="d-flex"><span>@label</span><MudSpacer /><b>@count</b></div>
+                        }
+                    </MudPaper>
+                }
+            </div>
+            @if (a.AnonymousAnswers || _hasAnonymous)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">
+                    Anonymous answers are stored without user, computer or time and listed by content only.
+                </MudAlert>
+                <DataGrid TRow="AnonymousAnswerRow" List="ConsoleLists.AnonymousAnswers" Prefix="a." Scope="_scope" />
+            }
+            @if (!a.AnonymousAnswers || _hasNamed)
+            {
+                <DataGrid TRow="NamedAnswerRow" List="ConsoleLists.NamedAnswers" Prefix="na." Scope="_scope" />
+            }
+        </MudTabPanel>
+    </MudTabs>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    [SupplyParameterFromQuery(Name = "tab")] public int? TabParam { get; set; }
+
+    private sealed record QuestionSummary(Guid Id, string Prompt, QuestionKind Kind, bool Hidden, int Total, List<(string Label, int Count)> Counts)
+    {
+        public string[] Labels => Counts.Select(c => c.Label).ToArray();
+        public List<ChartSeries<double>> Series => [new ChartSeries<double> { Name = "Answers", Data = Counts.Select(c => (double)c.Count).ToArray() }];
+    }
+
+    private Announcement? _a;
+    private bool _loaded;
+    private int _delivered;
+    private int _confirmed;
+    private bool _hasAnonymous;
+    private bool _hasNamed;
+    private List<QuestionSummary> _questions = [];
+    private Dictionary<string, string?> _scope = new();
+
+    private int Tab => Math.Clamp(TabParam ?? 0, 0, 2);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _scope = new Dictionary<string, string?> { ["announcement"] = Id.ToString() };
+        if (!RendererInfo.IsInteractive || _a?.Id == Id) return;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _a = await db.Announcements.AsNoTracking().Include(x => x.Targets).Include(x => x.Questions).ThenInclude(q => q.Options)
+            .AsSplitQuery().FirstOrDefaultAsync(x => x.Id == Id);
+        _loaded = true;
+        if (_a is null) return;
+        _delivered = await db.Deliveries.Where(d => d.AnnouncementId == Id).Select(d => d.UserKey).Distinct().CountAsync();
+        _confirmed = await db.Confirmations.Where(c => c.AnnouncementId == Id).Select(c => c.UserKey).Distinct().CountAsync();
+        _hasAnonymous = await db.AnswerSets.AnyAsync(s => s.AnnouncementId == Id && s.ConfirmationId == null);
+        _hasNamed = await db.AnswerSets.AnyAsync(s => s.AnnouncementId == Id && s.ConfirmationId != null);
+
+        // Aggregates only (counts per option): safe for anonymous answers too.
+        var counts = await db.AnswerSelections.Where(s => s.Answer!.AnswerSet!.AnnouncementId == Id)
+            .GroupBy(s => new { s.Answer!.QuestionId, s.OptionId, s.OptionLabel })
+            .Select(g => new { g.Key.QuestionId, g.Key.OptionId, g.Key.OptionLabel, Count = g.Count() }).ToListAsync();
+        var totals = await db.Answers.Where(x => x.AnswerSet!.AnnouncementId == Id)
+            .GroupBy(x => x.QuestionId).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.Count);
+
+        _questions = _a.Questions.OrderBy(q => q.SortOrder).Select(q =>
+        {
+            var list = q.Options.OrderBy(o => o.SortOrder)
+                .Select(o => (o.Label, counts.Where(c => c.QuestionId == q.Id && c.OptionId == o.Id).Sum(c => c.Count))).ToList();
+            // Options that no longer exist but were answered (snapshot labels).
+            list.AddRange(counts.Where(c => c.QuestionId == q.Id && q.Options.All(o => o.Id != c.OptionId)).Select(c => (c.OptionLabel + " (removed)", c.Count)));
+            return new QuestionSummary(q.Id, q.Prompt, q.Kind, q.Hidden, totals.GetValueOrDefault(q.Id), list);
+        }).ToList();
+    }
+
+    private void TabChanged(int index) =>
+        Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", index == 0 ? null : index), replace: true);
+
+    private async Task DeleteAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Delete announcement",
+                $"Delete \"{_a?.Title}\" with all deliveries, confirmations and answers? Open windows are withdrawn.", "Delete")) return;
+        var result = await AnnouncementService.DeleteAsync(Id, actor);
+        if (result.Ok)
+        {
+            Snackbar.Add("Announcement deleted.", Severity.Success);
+            Nav.NavigateTo("/announcements");
+        }
+        else Snackbar.Add(result.Error ?? "The announcement could not be deleted.", Severity.Error);
+    }
+}

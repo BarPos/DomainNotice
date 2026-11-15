@@ -1,0 +1,10 @@
+@page "/audit"
+
+<PageTitle>Audit log · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudText Typo="Typo.h5">Audit log</MudText>
+    <MudText Typo="Typo.body2">Who changed what in the Console.</MudText>
+</div>
+
+<DataGrid TRow="AuditRow" List="ConsoleLists.Audit" />

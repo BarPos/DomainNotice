@@ -235,7 +235,13 @@
         }
     }
 
-    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        Clock.Changed += OnClockChanged;
+    }
+
+    private void OnClockChanged() => InvokeAsync(StateHasChanged);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -536,6 +542,7 @@
     public void Dispose()
     {
         Nav.LocationChanged -= OnLocationChanged;
+        Clock.Changed -= OnClockChanged;
         _cts?.Cancel();
     }
 }

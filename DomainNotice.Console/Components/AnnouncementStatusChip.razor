@@ -1,0 +1,13 @@
+<MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="ChipColor">@Status</MudChip>
+
+@code {
+    [Parameter] public AnnouncementStatus Status { get; set; }
+
+    private Color ChipColor => Status switch
+    {
+        AnnouncementStatus.Active => Color.Success,
+        AnnouncementStatus.Scheduled => Color.Info,
+        AnnouncementStatus.Draft => Color.Default,
+        _ => Color.Secondary,
+    };
+}

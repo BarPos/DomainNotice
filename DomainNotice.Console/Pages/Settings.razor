@@ -1,0 +1,394 @@
+@page "/settings"
+@using Microsoft.Extensions.Options
+@using DomainNotice.Server.Options
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IEnrolmentAdmin Enrolment
+@inject IServerIdentity Identity
+@inject IAgentPackageCache Packages
+@inject ILocalAccountService LocalAccounts
+@inject IServerUpdateService Updates
+@inject IAnnouncementService Markdown
+@inject IOptions<AgentsOptions> AgentsOptions
+@inject IOptions<HistoryOptions> HistoryOptions
+@inject IOptions<LocalAccountsOptions> LocalAccountsOptions
+@inject IOptions<UpdatesOptions> UpdatesOptions
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ConsoleUser Me
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject BrowserClock Clock
+
+<PageTitle>Settings · DomainNotice</PageTitle>
+
+<div class="dn-page-title">
+    <MudText Typo="Typo.h5">Settings</MudText>
+</div>
+
+<MudTabs Outlined="true" Rounded="true" ActivePanelIndex="TabIndex" ActivePanelIndexChanged="TabChanged" KeepPanelsAlive="false" TabPanelsClass="pa-4">
+    <MudTabPanel Text="Enrolment" Icon="@Icons.Material.Filled.VpnKey">
+        @if (_enrolment is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            <MudText Typo="Typo.subtitle1">Install password</MudText>
+            <MudText Typo="Typo.body2" Class="mb-2">
+                New computers send this password once when they enrol. Already enrolled computers are not affected when you rotate it.
+            </MudText>
+            <MudSwitch T="bool" Value="_enrolment.RequirePassword" ValueChanged="SetRequireAsync" Color="Color.Primary" Disabled="!_isAdmin"
+                       Label="@(_enrolment.RequirePassword ? "Required to enrol a computer" : "Not required: anyone who can reach the agent port can enrol")" />
+            <div class="d-flex align-center gap-3 mt-2">
+                <MudChip T="string" Size="Size.Small" Color="@(_enrolment.PasswordSet ? Color.Success : Color.Warning)" Variant="Variant.Outlined">
+                    @(_enrolment.PasswordSet ? $"Password set ({(_enrolment.PasswordFromDatabase ? "in the Console" : "in the config file")})" : "No password set")
+                </MudChip>
+                <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Password" OnClick="SetInstallPasswordAsync">
+                        @(_enrolment.PasswordSet ? "Rotate password" : "Set password")
+                    </MudButton>
+                </AuthorizeView>
+            </div>
+            @if (_enrolment.RequirePassword && !_enrolment.PasswordSet)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">A password is required but none is set, so no computer can enrol.</MudAlert>
+            }
+
+            <MudDivider Class="my-4" />
+            <MudText Typo="Typo.subtitle1">Computers awaiting approval receive</MudText>
+            <MudRadioGroup T="AwaitingApprovalPolicy" Value="_policy" ValueChanged="SetPolicyAsync" Disabled="!_isAdmin">
+                <MudRadio T="AwaitingApprovalPolicy" Value="AwaitingApprovalPolicy.EveryoneAndUser" Color="Color.Primary">Everyone and User announcements (default)</MudRadio>
+                <MudRadio T="AwaitingApprovalPolicy" Value="AwaitingApprovalPolicy.Nothing" Color="Color.Primary">Nothing until approved</MudRadio>
+            </MudRadioGroup>
+            <MudText Typo="Typo.caption">They never receive Computer, Computer group or OU announcements before approval.</MudText>
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="Agent install" Icon="@Icons.Material.Filled.InstallDesktop">
+        <MudText Typo="Typo.subtitle1">Server key fingerprint</MudText>
+        <MudText Class="dn-mono mb-4">@KeyFingerprint.Display(Identity.Fingerprint)</MudText>
+
+        <MudText Typo="Typo.subtitle1">Install command</MudText>
+        <MudText Typo="Typo.body2" Class="mb-2">Run on the computer as an administrator (or deploy with these MSI properties).</MudText>
+        <div class="d-flex align-center gap-2">
+            <MudTextField T="string" Value="@MsiexecLine" ReadOnly="true" Variant="Variant.Outlined" Margin="Margin.Dense" Class="dn-mono" Lines="2" />
+            <MudTooltip Text="Copy">
+                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" OnClick="CopyAsync" aria-label="Copy the install command" />
+            </MudTooltip>
+        </div>
+        @if (_enrolment?.RequirePassword == true)
+        {
+            <MudText Typo="Typo.caption">Replace &lt;install password&gt; with the install password. The MSI keeps it hidden from its log.</MudText>
+        }
+
+        <MudDivider Class="my-4" />
+        <MudText Typo="Typo.subtitle1">Agent package (MSI) for version @AppVersion.Current</MudText>
+        @if (Imported is not null)
+        {
+            <MudAlert Severity="Severity.Success" Dense="true" Class="my-2">@Imported</MudAlert>
+        }
+        @if (ImportError is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="my-2">@ImportError</MudAlert>
+        }
+        @if (_current is null)
+        {
+            <MudText Class="my-2">No agent MSI is cached for this server version.
+                @(UpdatesOptions.Value.IsConfigured ? "It is downloaded from GitHub on \"Check now\" (About and updates)." : "Import a locally built MSI below.")</MudText>
+        }
+        else
+        {
+            <div class="d-flex align-center gap-3 my-2">
+                <MudButton Href="/download/agent-msi" download="" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Download">
+                    Download DomainNotice.Agent-@(_current.Version)-x64.msi
+                </MudButton>
+                <MudText Typo="Typo.caption">@FormatSize(_current.Size) · SHA-256 <span class="dn-mono">@_current.Sha256</span> · @_current.Source, @Clock.Format(_current.AddedAtUtc)</MudText>
+            </div>
+        }
+        @if (_packages.Count > 0)
+        {
+            <MudSimpleTable Dense="true" Class="my-2">
+                <thead><tr><th>Version</th><th>Size</th><th>SHA-256</th><th>Source</th><th>Added</th></tr></thead>
+                <tbody>
+                    @foreach (var p in _packages)
+                    {
+                        <tr><td>@p.Version</td><td>@FormatSize(p.Size)</td><td class="dn-mono">@p.Sha256</td><td>@p.Source</td><td>@Clock.Format(p.AddedAtUtc)</td></tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+        <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+            <MudPaper Outlined="true" Class="pa-3 mt-3">
+                <MudText Typo="Typo.subtitle2">Import a locally built MSI</MudText>
+                <MudText Typo="Typo.caption">For version @AppVersion.Current, at most @(Endpoints.ConsoleEndpoints.MaxMsiBytes / (1024 * 1024)) MB. Used for first installs and agent updates.</MudText>
+                <form method="post" action="/settings/agent-package" enctype="multipart/form-data" class="d-flex align-center gap-3 mt-2">
+                    <AntiforgeryToken />
+                    <input type="file" name="file" accept=".msi" required />
+                    <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Upload">Import</MudButton>
+                </form>
+            </MudPaper>
+        </AuthorizeView>
+    </MudTabPanel>
+
+    <MudTabPanel Text="History" Icon="@Icons.Material.Filled.History">
+        <MudText Typo="Typo.subtitle1">Retention</MudText>
+        <MudText>Name, user and IP history is kept for <b>@HistoryOptions.Value.RetentionDays days</b> after a row is closed.</MudText>
+        <MudText Typo="Typo.caption">Set with History:RetentionDays in the config file. Current rows, announcements, deliveries, confirmations and answers are never pruned.</MudText>
+    </MudTabPanel>
+
+    <MudTabPanel Text="Local accounts" Icon="@Icons.Material.Filled.ManageAccounts">
+        @if (!LocalAccountsOptions.Value.Enabled)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">Local sign-in is turned off (LocalAccounts:Enabled). Accounts can be managed but not used.</MudAlert>
+        }
+        <div class="d-flex align-center mb-2">
+            <MudText Typo="Typo.body2">Backup accounts with full admin rights; they work when the directory is unreachable.</MudText>
+            <MudSpacer />
+            <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PersonAdd" OnClick="AddAccountAsync">Add account</MudButton>
+            </AuthorizeView>
+        </div>
+        <MudSimpleTable Dense="true" Hover="true">
+            <thead><tr><th>User name</th><th>State</th><th>Created</th><th>Last sign-in</th><th>Password changed</th><th></th></tr></thead>
+            <tbody>
+                @if (_accounts.Count == 0) { <tr><td colspan="6" class="dn-grid-empty">No local accounts.</td></tr> }
+                @foreach (var a in _accounts)
+                {
+                    <tr>
+                        <td>@a.UserName</td>
+                        <td>@(a.Disabled ? "Disabled" : "Active")</td>
+                        <td>@Clock.Format(a.CreatedAtUtc) by @a.CreatedBy</td>
+                        <td>@Clock.Format(a.LastSignInAtUtc)</td>
+                        <td>@Clock.Format(a.PasswordChangedAtUtc)</td>
+                        <td style="text-align:right; white-space:nowrap">
+                            <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+                                <MudButton Size="Size.Small" OnClick="@(() => ResetPasswordAsync(a))">Reset password</MudButton>
+                                <MudButton Size="Size.Small" Color="@(a.Disabled ? Color.Primary : Color.Error)" OnClick="@(() => ToggleDisabledAsync(a))">@(a.Disabled ? "Enable" : "Disable")</MudButton>
+                            </AuthorizeView>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    </MudTabPanel>
+
+    <MudTabPanel Text="About and updates" Icon="@Icons.Material.Filled.Info" BadgeData="@(_update?.UpdateAvailable == true ? "!" : null)" BadgeColor="Color.Warning">
+        @if (_update is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            var u = _update;
+            @if (!u.Configured)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">Updates are not configured (Updates:GitHubRepository is blank). No update checks are made.</MudAlert>
+            }
+            <dl class="dn-kv">
+                <dt>Current version</dt><dd>@u.CurrentVersion</dd>
+                <dt>Repository</dt><dd>@(u.Configured ? UpdatesOptions.Value.GitHubRepository : "—") @(u.Configured ? $"({UpdatesOptions.Value.Channel})" : "")</dd>
+                <dt>Latest release</dt>
+                <dd>
+                    @if (u.Latest is { } r)
+                    {
+                        <span>@r.Version @(r.Prerelease ? "(prerelease)" : "") @(r.PublishedAtUtc is null ? "" : $"· {Clock.Format(r.PublishedAtUtc)}")</span>
+                        @if (r.HtmlUrl is not null && Uri.TryCreate(r.HtmlUrl, UriKind.Absolute, out var link) && link.Scheme == Uri.UriSchemeHttps)
+                        {
+                            <MudLink Href="@link.ToString()" Target="_blank" rel="noopener noreferrer" Class="ml-2">Release page</MudLink>
+                        }
+                    }
+                    else { <span>—</span> }
+                </dd>
+                <dt>Last check</dt><dd>@(u.LastCheckUtc is null ? "Never" : Clock.Format(u.LastCheckUtc)) @if (u.LastCheckError is not null) { <MudText Color="Color.Error" Typo="Typo.body2">@u.LastCheckError</MudText> }</dd>
+                <dt>Self-update</dt><dd>@(u.SelfUpdateSupported ? "Supported on this server" : "Not supported here (needs the Ubuntu install made by install.sh)")</dd>
+                @if (u.LastRun is { } run)
+                {
+                    <dt>Last update</dt><dd>@run.FromVersion → @run.ToVersion: @run.State @(run.Message is null ? "" : $"— {run.Message}") (@Clock.Format(run.RequestedAtUtc), @run.RequestedBy)</dd>
+                }
+            </dl>
+            @if (u.UpdateAvailable)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">Version @u.Latest?.Version is available.</MudAlert>
+            }
+            <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
+                <div class="d-flex gap-2 mt-3">
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" Disabled="@(!u.Configured || _busy)" OnClick="CheckNowAsync">Check now</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.SystemUpdate"
+                               Disabled="@(!u.Configured || !u.UpdateAvailable || !u.SelfUpdateSupported || _busy)" OnClick="UpdateNowAsync">Update now</MudButton>
+                </div>
+            </AuthorizeView>
+            @if (u.Latest?.NotesMarkdown is { Length: > 0 } notes)
+            {
+                <MudText Typo="Typo.subtitle1" Class="mt-4">Release notes</MudText>
+                <MudPaper Outlined="true" Class="pa-3 dn-markdown">@((MarkupString)Markdown.RenderPreviewHtml(notes))</MudPaper>
+            }
+        }
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    private static readonly string[] Tabs = ["enrolment", "agent", "history", "accounts", "about"];
+
+    [SupplyParameterFromQuery(Name = "tab")] public string? Tab { get; set; }
+    [SupplyParameterFromQuery(Name = "imported")] public string? Imported { get; set; }
+    [SupplyParameterFromQuery(Name = "importError")] public string? ImportError { get; set; }
+
+    private bool _isAdmin;
+    private bool _busy;
+    private EnrolmentState? _enrolment;
+    private AwaitingApprovalPolicy _policy;
+    private AgentPackageInfo? _current;
+    private IReadOnlyList<AgentPackageInfo> _packages = [];
+    private List<LocalAccount> _accounts = [];
+    private ServerUpdateStatus? _update;
+
+    private int TabIndex => Math.Max(0, Array.IndexOf(Tabs, Tab ?? "enrolment"));
+
+    private string MsiexecLine
+    {
+        get
+        {
+            var host = new Uri(Nav.BaseUri).Host;
+            var line = $"msiexec /i DomainNotice.Agent-{AppVersion.Current}-x64.msi SERVERHOST={host} SERVERPORT={AgentsOptions.Value.Port} SERVERFINGERPRINT={Identity.Fingerprint}";
+            return _enrolment?.RequirePassword == false ? line : line + " INSTALLPASSWORD=<install password>";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!RendererInfo.IsInteractive) return;
+        _isAdmin = await Me.IsAdminAsync();
+        await Task.WhenAll(LoadEnrolmentAsync(), LoadPackagesAsync(), LoadAccountsAsync(), LoadUpdatesAsync());
+    }
+
+    private async Task LoadEnrolmentAsync()
+    {
+        _enrolment = await Enrolment.GetStateAsync();
+        _policy = await Enrolment.GetAwaitingApprovalPolicyAsync();
+    }
+
+    private async Task LoadPackagesAsync()
+    {
+        _current = await Packages.GetCurrentAsync();
+        _packages = await Packages.ListAsync();
+    }
+
+    private async Task LoadAccountsAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _accounts = await db.LocalAccounts.AsNoTracking().OrderBy(a => a.UserName).ToListAsync();
+    }
+
+    private async Task LoadUpdatesAsync() => _update = await Updates.GetStatusAsync();
+
+    private void TabChanged(int index) =>
+        Nav.NavigateTo(Nav.GetUriWithQueryParameters(new Dictionary<string, object?>
+        {
+            ["tab"] = index == 0 ? null : Tabs[index], ["imported"] = null, ["importError"] = null,
+        }), replace: true);
+
+    private static string FormatSize(long bytes) => bytes >= 1024 * 1024 ? $"{bytes / (1024.0 * 1024):0.0} MB" : $"{bytes / 1024.0:0} KB";
+
+    private async Task CopyAsync()
+    {
+        var ok = await JS.InvokeAsync<bool>("domainNotice.copy", MsiexecLine);
+        Snackbar.Add(ok ? "Copied." : "Copy failed; select the text instead.", ok ? Severity.Success : Severity.Warning);
+    }
+
+    private async Task SetRequireAsync(bool required)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!required && !await PromptDialog.ConfirmAsync(Dialogs, "Turn off the install password",
+                "Anyone who can reach the agent port will be able to enrol a computer. Continue?", "Turn off")) return;
+        var result = await Enrolment.SetRequirePasswordAsync(required, actor);
+        if (!result.Ok) Snackbar.Add(result.Error ?? "Failed.", Severity.Error);
+        await LoadEnrolmentAsync();
+    }
+
+    private async Task SetInstallPasswordAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        var password = await PromptDialog.AskAsync(Dialogs, _enrolment?.PasswordSet == true ? "Rotate install password" : "Set install password",
+            "Install password", "Save", secret: true, confirm: true, minLength: 8,
+            message: "Only a hash is stored. Enrolled computers are not affected.");
+        if (password is null) return;
+        var result = await Enrolment.SetPasswordAsync(password, actor);
+        Snackbar.Add(result.Ok ? "Install password saved." : result.Error ?? "Failed.", result.Ok ? Severity.Success : Severity.Error);
+        await LoadEnrolmentAsync();
+    }
+
+    private async Task SetPolicyAsync(AwaitingApprovalPolicy policy)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        await Enrolment.SetAwaitingApprovalPolicyAsync(policy, actor);
+        _policy = policy;
+        Snackbar.Add("Saved.", Severity.Success);
+    }
+
+    private async Task AddAccountAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        var name = await PromptDialog.AskAsync(Dialogs, "Add local account", "User name", "Next");
+        if (name is null) return;
+        var password = await PromptDialog.AskAsync(Dialogs, $"Password for {name}", "Password", "Create account", secret: true, confirm: true, minLength: 8);
+        if (password is null) return;
+        var result = await LocalAccounts.CreateAsync(name.Trim(), password, actor);
+        Snackbar.Add(result.Ok ? $"Account {name} created." : result.Error ?? "Failed.", result.Ok ? Severity.Success : Severity.Error);
+        await LoadAccountsAsync();
+    }
+
+    private async Task ResetPasswordAsync(LocalAccount account)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        var password = await PromptDialog.AskAsync(Dialogs, $"Reset password of {account.UserName}", "New password", "Reset", secret: true, confirm: true, minLength: 8);
+        if (password is null) return;
+        var result = await LocalAccounts.ResetPasswordAsync(account.Id, password, actor);
+        Snackbar.Add(result.Ok ? "Password reset." : result.Error ?? "Failed.", result.Ok ? Severity.Success : Severity.Error);
+        await LoadAccountsAsync();
+    }
+
+    private async Task ToggleDisabledAsync(LocalAccount account)
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!account.Disabled && !await PromptDialog.ConfirmAsync(Dialogs, "Disable account",
+                $"Disable {account.UserName}? Open sessions of this account end within a few minutes.", "Disable")) return;
+        var result = await LocalAccounts.SetDisabledAsync(account.Id, !account.Disabled, actor);
+        if (!result.Ok) Snackbar.Add(result.Error ?? "Failed.", Severity.Error);
+        await LoadAccountsAsync();
+    }
+
+    private async Task CheckNowAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        _busy = true;
+        try
+        {
+            _update = await Updates.CheckNowAsync(actor);
+            await LoadPackagesAsync();
+            Snackbar.Add(_update.LastCheckError is null ? "Checked." : $"Check failed: {_update.LastCheckError}", _update.LastCheckError is null ? Severity.Success : Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task UpdateNowAsync()
+    {
+        if (await Me.RequireAdminAsync() is not { } actor) return;
+        if (!await PromptDialog.ConfirmAsync(Dialogs, "Update the server",
+                $"Download and install version {_update?.Latest?.Version}? The server restarts; a database backup is made first and a failed update is rolled back.", "Update now")) return;
+        _busy = true;
+        try
+        {
+            var result = await Updates.UpdateNowAsync(actor);
+            Snackbar.Add(result.Ok ? "The update was staged. The server restarts shortly." : result.Error ?? "The update could not be started.",
+                result.Ok ? Severity.Success : Severity.Error);
+            await LoadUpdatesAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

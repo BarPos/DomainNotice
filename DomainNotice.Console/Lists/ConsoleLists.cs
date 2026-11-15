@@ -319,10 +319,11 @@ public sealed class AnnouncementsList : GridList<Announcement, AnnouncementRow>
     public override IReadOnlyList<GridField<Announcement>> Fields(GridContext ctx)
     {
         var db = ctx.Db;
+        // Percent of delivered users who confirmed.
         Expression<Func<Announcement, double>> rate = a =>
             db.Deliveries.Where(d => d.AnnouncementId == a.Id).Select(d => d.UserKey).Distinct().Count() == 0
                 ? 0.0
-                : (double)db.Confirmations.Where(c => c.AnnouncementId == a.Id).Select(c => c.UserKey).Distinct().Count()
+                : 100.0 * db.Confirmations.Where(c => c.AnnouncementId == a.Id).Select(c => c.UserKey).Distinct().Count()
                   / db.Deliveries.Where(d => d.AnnouncementId == a.Id).Select(d => d.UserKey).Distinct().Count();
         // Status order: draft, scheduled, active, ended (by start for non-drafts).
         Expression<Func<Announcement, int>> statusSort = a => a.IsDraft ? 0 : 1;
@@ -344,7 +345,7 @@ public sealed class AnnouncementsList : GridList<Announcement, AnnouncementRow>
                           || ("everyone".Contains(v) && !a.Targets.Any()),
                 search: true),
             GridField.Bool<Announcement>("anonymous", "Anonymous answers", a => a.AnonymousAnswers),
-            GridField.Number<Announcement>("rate", "Confirmation rate (0–1)", rate),
+            GridField.Number<Announcement>("rate", "Confirmation rate (%)", rate),
             GridField.Date<Announcement>("updated", "Last change", a => a.UpdatedAtUtc),
         ];
     }
@@ -675,6 +676,7 @@ public sealed class DirectoryObjectsList : GridList<DirectoryObject, DirectoryOb
         new("enabled", "Enabled", r => r.Enabled, ColumnKind.Bool, "enabled"),
         new("deleted", "Gone from AD", r => r.Deleted, ColumnKind.Bool, "deleted", DefaultVisible: false),
         new("synced", "Last synced", r => r.LastSyncedUtc, ColumnKind.Date, "synced"),
+        new("agent", "Agent", r => r.Kind == DirectoryObjectKind.Computer ? (r.EnrolledComputerId is null ? "No agent" : "Enrolled") : ""),
     ];
 
     public override IReadOnlyList<GridField<DirectoryObject>> Fields(GridContext ctx) =>
@@ -686,6 +688,9 @@ public sealed class DirectoryObjectsList : GridList<DirectoryObject, DirectoryOb
         GridField.Bool<DirectoryObject>("enabled", "Enabled", d => d.Enabled),
         GridField.Bool<DirectoryObject>("deleted", "Gone from AD", d => d.Deleted),
         GridField.Date<DirectoryObject>("synced", "Last synced", d => d.LastSyncedUtc),
+        // Plan 7.8: AD computers that have no agent.
+        GridField.Bool<DirectoryObject>("hasAgent", "Has an enrolled agent",
+            d => ctx.Db.Computers.Any(c => c.DirectoryObjectGuid == d.ObjectGuid && c.RevokedAtUtc == null), sortable: false),
     ];
 
     protected override ValueTask<IQueryable<DirectoryObject>> SourceAsync(GridContext ctx)
@@ -699,6 +704,9 @@ public sealed class DirectoryObjectsList : GridList<DirectoryObject, DirectoryOb
     {
         ObjectGuid = d.ObjectGuid, Kind = d.Kind, Name = d.Name, SamAccountName = d.SamAccountName, DisplayName = d.DisplayName,
         DistinguishedName = d.DistinguishedName, Enabled = d.Enabled, Deleted = d.Deleted, LastSyncedUtc = d.LastSyncedUtc,
+        EnrolledComputerId = d.Kind == DirectoryObjectKind.Computer
+            ? ctx.Db.Computers.Where(c => c.DirectoryObjectGuid == d.ObjectGuid && c.RevokedAtUtc == null).Select(c => (Guid?)c.Id).FirstOrDefault()
+            : null,
     };
 
     protected override IReadOnlyList<GridSort<DirectoryObject>> TieBreakers(GridContext ctx) => [ConsoleLists.By<DirectoryObject, Guid>(d => d.ObjectGuid)];
