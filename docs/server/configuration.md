@@ -26,7 +26,8 @@ Console (**Settings**). Those are stored in the database, and the database value
 ```jsonc
 {
   "ConnectionStrings": { "Default": "Host=localhost;Port=5432;Database=domainnotice;Username=domainnotice;Password=…" },
-  "Console":   { "Urls": "https://0.0.0.0:443", "Certificate": "/opt/domainnotice/config/console.pem", "CertificateKey": "/opt/domainnotice/config/console.key" },
+  "Console":   { "Urls": "https://0.0.0.0:443", "Certificate": "/opt/domainnotice/config/console.pem", "CertificateKey": "/opt/domainnotice/config/console.key",
+                 "ForwardedHeaders": { "Enabled": false, "KnownProxies": [], "KnownNetworks": [] } },
   "Paths":     { "Data": "/opt/domainnotice/data", "Backups": "/opt/domainnotice/backups" },
   "Agents":    { "Port": 5150, "OfflineAfterSeconds": 90, "MaxMessageBytes": 1048576,
                  "UpdateTimeoutMinutes": 30, "MaxParallelUpdates": 50, "UpdateBandwidthMbps": 0, "AutoUpdate": false },
@@ -56,9 +57,15 @@ Console (**Settings**). Those are stored in the database, and the database value
 
 | Key | Default | |
 |---|---|---|
-| `Urls` | `https://0.0.0.0:443` | Kestrel URLs, `;`-separated |
-| `Certificate` | — | PEM certificate (chain) for HTTPS |
+| `Urls` | `https://0.0.0.0:443` | Kestrel URLs, `;`-separated. `http://0.0.0.0:80` serves the Console over plain HTTP (no certificate needed). |
+| `Certificate` | — | PEM certificate (chain) for HTTPS. Not used for `http://` URLs. |
 | `CertificateKey` | — | PEM private key |
+| `ForwardedHeaders:Enabled` | `false` | Optional. Trust `X-Forwarded-For`, `-Proto` and `-Host`, so the real client IP (rate limits, audit log) and the original scheme are known when another server forwards requests to the Console |
+| `ForwardedHeaders:KnownProxies` | `[]` | IP addresses whose forwarded headers are trusted. Loopback is always trusted. |
+| `ForwardedHeaders:KnownNetworks` | `[]` | Networks whose forwarded headers are trusted (CIDR, e.g. `10.0.0.0/24`) |
+
+Sign-in cookies are always `Secure` while every URL is `https://`. When any URL is `http://`, cookies follow the
+request, so signing in over plain HTTP works. See [Console over HTTP](installation.md#console-over-http).
 
 ## Paths
 

@@ -17,8 +17,14 @@
         <MudTextField T="string" Value="_searchText" ValueChanged="SearchChanged" Placeholder="Search" DebounceInterval="400"
                       Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined"
                       Margin="Margin.Dense" Clearable="true" Class="dn-grid-search" aria-label="Search this list" />
-        <MudButton StartIcon="@Icons.Material.Filled.FilterList" Variant="Variant.Text" OnClick="@(() => OpenEditor(null))"
-                   Disabled="@(!_fields.Any(f => f.Filterable))">Add filter</MudButton>
+        <MudMenu StartIcon="@Icons.Material.Filled.FilterList" Label="Add filter" Variant="Variant.Text" Dense="true"
+                 Disabled="@(!_fields.Any(f => f.Filterable))" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft"
+                 aria-label="Add a filter">
+            @foreach (var f in _fields.Where(f => f.Filterable))
+            {
+                <MudMenuItem OnClick="@(() => AddItem(f.Key))">@f.Label</MudMenuItem>
+            }
+        </MudMenu>
         @ToolbarContent
         <MudSpacer />
         <MudMenu Icon="@Icons.Material.Filled.ViewColumn" Dense="true" AriaLabel="Choose columns" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
@@ -40,19 +46,18 @@
         </MudTooltip>
     </div>
 
-    @if (_editorOpen)
+    @if (_items.Count > 0)
     {
-        <FilterEditor @key="@_editorField" Fields="_fields" InitialField="@_editorField" OnApply="AddFilter" OnCancel="@(() => _editorOpen = false)" />
-    }
-
-    @if (_query.Filters.Count > 0)
-    {
-        <div class="dn-grid-chips">
-            @foreach (var clause in _query.Filters)
+        @* Editable filters: change the value and press Enter, or × to remove. *@
+        <div class="dn-filterbar">
+            @foreach (var item in _items)
             {
-                <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" OnClose="@(() => RemoveFilter(clause))">
-                    @ChipText(clause)
-                </MudChip>
+                var field = _fields.FirstOrDefault(f => f.Key == item.Field);
+                if (field is not null)
+                {
+                    <FilterBarItem @key="item.Id" @ref="_itemRefs[item.Id]" Field="field" Applied="item.Applied" AutoFocus="item.Focus"
+                                   OnApply="@(c => ApplyItem(item, c))" OnRemove="@(() => RemoveItem(item))" />
+                }
             }
             <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ClearFilters">Clear all</MudButton>
         </div>
@@ -88,7 +93,7 @@
                             {
                                 <span @onclick:stopPropagation="true">
                                     <MudIconButton Icon="@Icons.Material.Filled.FilterAlt" Size="Size.Small" Class="pa-0 ml-1" aria-label="@($"Filter {col.Label}")"
-                                                   OnClick="@(() => OpenEditor(filterable.Key))" />
+                                                   OnClick="@(() => FilterColumnAsync(filterable.Key))" />
                                 </span>
                             }
                         </span>
@@ -189,8 +194,17 @@
     private bool _loading;
     private bool _loaded;
     private string? _error;
-    private bool _editorOpen;
-    private string? _editorField;
+    /// <summary>The filters in the bar: applied ones (in the URL) and ones added but not applied yet.</summary>
+    private List<FilterItem> _items = [];
+    private readonly Dictionary<Guid, FilterBarItem> _itemRefs = new();
+
+    private sealed class FilterItem
+    {
+        public Guid Id { get; } = Guid.NewGuid();
+        public required string Field { get; init; }
+        public FilterClause? Applied { get; set; }
+        public bool Focus { get; set; }
+    }
     private readonly Dictionary<object, TRow> _selected = new();
     private MudMenu? _contextMenu;
     private TRow? _contextRow;
@@ -255,7 +269,33 @@
     {
         var uri = new Uri(Nav.Uri);
         _query = GridQuery.Parse(uri.Query, Prefix);
-        if (!_editorOpen) _searchText = _query.Search;
+        if (_searchText?.Trim() != _query.Search) _searchText = _query.Search;
+        SyncItems();
+    }
+
+    /// <summary>
+    /// Matches the filter bar to the URL: keeps items whose clause is still applied and unapplied (draft) items, in
+    /// their order; drops items whose clause disappeared (back button, Clear all); adds items for new clauses.
+    /// </summary>
+    private void SyncItems()
+    {
+        var remaining = _query.Filters.ToList();
+        var next = new List<FilterItem>();
+        foreach (var item in _items)
+        {
+            if (item.Applied is null)
+            {
+                next.Add(item);
+                continue;
+            }
+            var index = remaining.FindIndex(c => c == item.Applied);
+            if (index < 0) continue;
+            remaining.RemoveAt(index);
+            next.Add(item);
+        }
+        next.AddRange(remaining.Select(c => new FilterItem { Field = c.Field, Applied = c }));
+        _items = next;
+        foreach (var gone in _itemRefs.Keys.Where(id => _items.All(i => i.Id != id)).ToList()) _itemRefs.Remove(gone);
     }
 
     private async Task LoadIfChangedAsync()
@@ -342,33 +382,44 @@
         Navigate(q, replace: true);
     }
 
-    private void OpenEditor(string? field)
+    private void AddItem(string fieldKey)
     {
-        // @key on the editor recreates it when another column's filter icon is clicked.
-        _editorField = field;
-        _editorOpen = true;
+        foreach (var i in _items) i.Focus = false;
+        _items.Add(new FilterItem { Field = fieldKey, Focus = true });
     }
 
-    private void AddFilter(FilterClause clause)
+    /// <summary>Column header filter icon: focus that column's filter, or add one.</summary>
+    private async Task FilterColumnAsync(string fieldKey)
     {
-        _editorOpen = false;
-        var q = _query.Clone();
-        q.Filters.RemoveAll(f => f == clause);
-        q.Filters.Add(clause);
-        q.Page = 1;
-        Navigate(q);
+        var existing = _items.LastOrDefault(i => i.Field == fieldKey);
+        if (existing is not null && _itemRefs.TryGetValue(existing.Id, out var editor)) await editor.FocusAsync();
+        else AddItem(fieldKey);
     }
 
-    private void RemoveFilter(FilterClause clause)
+    private void ApplyItem(FilterItem item, FilterClause? clause)
+    {
+        item.Applied = clause;
+        item.Focus = false;
+        NavigateFilters();
+    }
+
+    private void RemoveItem(FilterItem item)
+    {
+        _items.Remove(item);
+        if (item.Applied is not null) NavigateFilters();
+    }
+
+    private void NavigateFilters()
     {
         var q = _query.Clone();
-        q.Filters.Remove(clause);
+        q.Filters = _items.Where(i => i.Applied is not null).Select(i => i.Applied!).ToList();
         q.Page = 1;
         Navigate(q);
     }
 
     private void ClearFilters()
     {
+        _items.Clear();
         var q = _query.Clone();
         q.Filters.Clear();
         q.Search = null;
@@ -466,29 +517,6 @@
         _contextRow = row;
         StateHasChanged();
         await _contextMenu.OpenMenuAsync(e);
-    }
-
-    private string ChipText(FilterClause clause)
-    {
-        var field = _fields.FirstOrDefault(f => f.Key == clause.Field);
-        var label = field?.Label ?? clause.Field;
-        string Option(string v) => field?.Options.FirstOrDefault(o => string.Equals(o.Value, v, StringComparison.OrdinalIgnoreCase))?.Label ?? v;
-        switch (clause.Op)
-        {
-            case FilterOp.Contains: return $"{label} contains \"{clause.Value}\"";
-            case FilterOp.Equals when field?.Kind == FieldKind.Bool: return $"{label}: {Option(clause.Value)}";
-            case FilterOp.Equals when field?.Kind == FieldKind.Choice: return $"{label} is {string.Join(" or ", clause.ParseList().Select(Option))}";
-            case FilterOp.Equals: return $"{label} is \"{clause.Value}\"";
-            case FilterOp.OlderThanDays: return $"{label} older than {clause.Value} days";
-            case FilterOp.WithinDays: return $"{label} within the last {clause.Value} days";
-            case FilterOp.AtLeast: return $"{label} ≥ {clause.Value}";
-            case FilterOp.AtMost: return $"{label} ≤ {clause.Value}";
-            case FilterOp.Between:
-                var (from, to) = clause.ParseRange();
-                return from is not null && to is not null ? $"{label} {Clock.FormatDate(from)} – {Clock.FormatDate(to)}"
-                    : from is not null ? $"{label} from {Clock.FormatDate(from)}" : $"{label} until {Clock.FormatDate(to)}";
-            default: return $"{label} {clause.Value}";
-        }
     }
 
     private RenderFragment RenderCell(TRow row, GridColumn<TRow> col) => builder =>

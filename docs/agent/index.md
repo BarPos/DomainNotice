@@ -53,7 +53,7 @@ this.
 - **GPO software installation:** create a transform (`.mst`) that sets the properties, or deploy with a startup script
   that runs the `msiexec` line above. Anyone who can read the transform can read the install password. Rotate it in
   **Settings → Enrolment** after the rollout; computers already enrolled are not affected.
-- **Intune / ConfigMgr:** a Win32 app with the `msiexec` line as the install command.
+- **Software distribution tools:** use the `msiexec` line above as the install command.
 
 ## What it does
 

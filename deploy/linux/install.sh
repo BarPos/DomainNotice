@@ -4,8 +4,12 @@
 #   sudo ./install.sh                                   interactive: asks every question
 #   sudo ./install.sh --unattended --package FILE ...   unattended, for automated installs
 #   sudo ./install.sh --repair | --upgrade              on an installed server (re-running offers both)
-#   sudo ./install.sh --uninstall                       removes program and units; keeps config, data, database
-#   sudo ./install.sh --purge                           removes everything (asks for confirmation)
+#   sudo ./install.sh --backup [--output PATH]          backup of the database, configuration, keys, data and program
+#   sudo ./install.sh --restore FILE                    restores such a backup on this server
+#   sudo ./install.sh --reset-password [USER]           new password for a local Console account
+#   sudo ./install.sh --uninstall                       removes EVERYTHING, including the database (offers a backup
+#                                                       first and asks for confirmation); --keep-data keeps config,
+#                                                       data and the database and removes only the program
 #
 # Package source:
 #   --package FILE        a DomainNotice.Server-<version>-linux-<arch>.tar.gz from build/build-server.sh or a release
@@ -16,19 +20,23 @@
 #   --db=local|existing   local: install PostgreSQL here (role and database "domainnotice", localhost only)
 #   --db-host H --db-port P --db-name N --db-user U --db-sslmode disable|allow|prefer|require|verify-ca|verify-full
 # Console:
-#   --console-port N (443)   --server-name NAME (DNS name agents and browsers use; default: hostname -f)
-#   --cert FILE --cert-key FILE   existing PEM certificate and key; without them a self-signed one is made
+#   --console-mode=https|http   https (default): HTTPS with a certificate. http: plain HTTP, no certificate
+#                            (e.g. when your own reverse proxy handles HTTPS). Agents always use TLS on port 5150.
+#   --console-port N         Console port (default 443 for https, 80 for http)
+#   --server-name NAME       DNS name agents and browsers use (default: hostname -f)
+#   --cert FILE --cert-key FILE   https mode: existing PEM certificate and key; without them a self-signed one is made
 #   --admin-user NAME        first local account
 # Other:
 #   --open-firewall=yes|no   open the Console port and 5150 when ufw is active (unattended default: no)
-#   --yes                    confirm --purge in unattended mode
+#   --yes                    confirm --uninstall / --restore in unattended mode
+#   --backup-to FILE         --uninstall: write a backup to FILE first (unattended; interactive asks)
 #
 # Secrets never come from command-line flags (other users can see the process list). Sources, in order:
 #   --secrets-file FILE   KEY=VALUE lines, the file must be mode 600 (or 400)
 #   --secrets-stdin       the same KEY=VALUE lines on standard input
 #   environment           DOMAINNOTICE_DB_PASSWORD, DOMAINNOTICE_ADMIN_PASSWORD
 #   prompt                hidden input (interactive mode)
-# Keys: DB_PASSWORD (existing database), ADMIN_PASSWORD (first local account, at least 8 characters).
+# Keys: DB_PASSWORD (existing database), ADMIN_PASSWORD (first local account or --reset-password, at least 8 characters).
 set -Eeuo pipefail
 
 # GitHub repository whose releases (built by .github/workflows/release.yml) install.sh and the server's updater use.
@@ -46,9 +54,10 @@ STATE_FILE="$INSTALL_ROOT/config/install.state"
 USER_AGENT="DomainNotice-Installer"
 
 MODE="" UNATTENDED=0 ASSUME_YES=0
+BACKUP_OUTPUT="" RESTORE_FILE="" RESET_USER="" KEEP_DATA=0 BACKUP_TO=""
 PACKAGE="" VERSION_ARG=""
 DB_MODE="" DB_HOST="" DB_PORT="" DB_NAME="" DB_USER="" DB_SSLMODE=""
-CONSOLE_PORT="" SERVER_NAME="" CERT_FILE="" CERT_KEY_FILE="" ADMIN_USER="" OPEN_FIREWALL=""
+CONSOLE_PORT="" SERVER_NAME="" CERT_FILE="" CERT_KEY_FILE="" ADMIN_USER="" OPEN_FIREWALL="" CONSOLE_MODE=""
 SECRETS_FILE="" SECRETS_STDIN=0
 DB_PASSWORD="" ADMIN_PASSWORD=""
 ARCH="" PKG_FILE="" PKG_VERSION="" PG_BIN="" WORK=""
@@ -184,11 +193,15 @@ parse_args() {
             --yes|-y) ASSUME_YES=1 ;;
             --repair) MODE=repair ;;
             --upgrade) MODE=upgrade ;;
-            --uninstall) MODE=uninstall ;;
-            --purge) MODE=purge ;;
+            --uninstall|--purge) MODE=uninstall ;;
+            --keep-data) KEEP_DATA=1 ;;
+            --backup) MODE=backup ;;
+            --reset-password)
+                MODE=reset-password
+                if [[ -n "$v" ]]; then RESET_USER="$v"; elif [[ $# -ge 2 && "$2" != -* ]]; then RESET_USER="$2"; shift; fi ;;
             --secrets-stdin) SECRETS_STDIN=1 ;;
             --package|--version|--db|--db-host|--db-port|--db-name|--db-user|--db-sslmode|--console-port|--server-name|\
-            --cert|--cert-key|--admin-user|--open-firewall|--secrets-file)
+            --cert|--cert-key|--admin-user|--open-firewall|--secrets-file|--console-mode|--restore|--output|--backup-to)
                 local val
                 if [[ -n "$v" ]]; then val="$v"; else [[ $# -ge 2 ]] || die "$a needs a value"; val="$2"; shift; fi
                 case "$a" in
@@ -197,6 +210,8 @@ parse_args() {
                     --db-user) DB_USER="$val" ;; --db-sslmode) DB_SSLMODE="$val" ;; --console-port) CONSOLE_PORT="$val" ;;
                     --server-name) SERVER_NAME="$val" ;; --cert) CERT_FILE="$val" ;; --cert-key) CERT_KEY_FILE="$val" ;;
                     --admin-user) ADMIN_USER="$val" ;; --open-firewall) OPEN_FIREWALL="$val" ;; --secrets-file) SECRETS_FILE="$val" ;;
+                    --console-mode) CONSOLE_MODE="$val" ;;
+                    --restore) MODE=restore; RESTORE_FILE="$val" ;; --output) BACKUP_OUTPUT="$val" ;; --backup-to) BACKUP_TO="$val" ;;
                 esac ;;
             --db-password|--admin-password|--password*)
                 die "$a: passwords are never accepted as flags; use --secrets-file, --secrets-stdin or the environment" ;;
@@ -406,6 +421,7 @@ unpack_release() {
 install_deploy_files() { # install_deploy_files RELEASE_DIR: root-owned update.sh and the systemd units
     local src="$1/deploy/linux" u
     install -o root -g root -m 755 "$src/update.sh" "$INSTALL_ROOT/bin/update.sh"
+    if [[ -f "$src/backup.sh" ]]; then install -o root -g root -m 755 "$src/backup.sh" "$INSTALL_ROOT/bin/backup.sh"; fi
     for u in "${UNITS[@]}"; do install -o root -g root -m 644 "$src/$u" "$UNIT_DIR/$u"; done
     systemctl daemon-reload
 }
@@ -518,17 +534,45 @@ setup_existing_database() {
 
 # ------------------------------------------------------------------------------------------------ config, step 7 HTTPS
 
+# ---- Console mode: https (Kestrel serves HTTPS with a certificate) or http (plain HTTP, no certificate)
+console_scheme() { if [[ "$CONSOLE_MODE" == http ]]; then echo http; else echo https; fi; }
+health_url() { echo "$(console_scheme)://127.0.0.1:$CONSOLE_PORT/healthz"; }
+collect_console_mode() { # asked before anything is changed on the machine
+    if [[ -z "$CONSOLE_MODE" ]]; then
+        if [[ $UNATTENDED -eq 0 ]] && ask_yes_no "Serve the Console over plain HTTP instead of HTTPS (e.g. behind your own HTTPS reverse proxy)?" n; then
+            CONSOLE_MODE=http
+        else
+            CONSOLE_MODE=https
+        fi
+    fi
+    [[ "$CONSOLE_MODE" == https || "$CONSOLE_MODE" == http ]] || die "--console-mode must be https or http"
+    if [[ "$CONSOLE_MODE" == http ]]; then
+        ask CONSOLE_PORT "Console HTTP port" 80
+        [[ -z "$CERT_FILE" ]] || warn "--cert is ignored with --console-mode=http"
+        warn "the Console will use plain HTTP: sign-in passwords travel unencrypted unless an HTTPS proxy is in front of it"
+    else
+        ask CONSOLE_PORT "Console HTTPS port" 443
+    fi
+    [[ "$CONSOLE_PORT" =~ ^[0-9]{1,5}$ ]] && ((CONSOLE_PORT >= 1 && CONSOLE_PORT <= 65535)) || die "invalid port '$CONSOLE_PORT'"
+    ((CONSOLE_PORT != AGENT_PORT)) || die "the Console port must differ from the agent port $AGENT_PORT"
+}
+
 write_config() {
     [[ ! -e "$CONFIG_FILE" ]] || { info "Keeping the existing $CONFIG_FILE"; return 0; }
     info "Writing $CONFIG_FILE"
     local cs
     cs="Host=$(cs_value "$DB_HOST");Port=$DB_PORT;Database=$(cs_value "$DB_NAME");Username=$(cs_value "$DB_USER");Password=$(cs_value "$DB_PASSWORD");SSL Mode=$(npgsql_sslmode "$DB_SSLMODE")"
-    local tmp
+    local tmp console_cert
+    if [[ "$CONSOLE_MODE" == http ]]; then
+        console_cert='"Certificate": "", "CertificateKey": ""'
+    else
+        console_cert="\"Certificate\": \"$INSTALL_ROOT/config/console.pem\", \"CertificateKey\": \"$INSTALL_ROOT/config/console.key\""
+    fi
     tmp="$(mktemp "$INSTALL_ROOT/config/.appsettings.XXXXXX")"
     (umask 077; cat >"$tmp" <<JSON
 {
   "ConnectionStrings": { "Default": "$(json_escape "$cs")" },
-  "Console":   { "Urls": "https://0.0.0.0:$CONSOLE_PORT", "Certificate": "$INSTALL_ROOT/config/console.pem", "CertificateKey": "$INSTALL_ROOT/config/console.key" },
+  "Console":   { "Urls": "$(console_scheme)://0.0.0.0:$CONSOLE_PORT", $console_cert },
   "Paths":     { "Data": "$INSTALL_ROOT/data", "Backups": "$INSTALL_ROOT/backups" },
   "Agents":    { "Port": $AGENT_PORT, "OfflineAfterSeconds": 90, "MaxMessageBytes": 1048576,
                  "UpdateTimeoutMinutes": 30, "MaxParallelUpdates": 50, "UpdateBandwidthMbps": 0, "AutoUpdate": false },
@@ -558,7 +602,7 @@ write_update_env() { # root-only copy of the database settings for update.sh (pg
     tmp="$(mktemp "$INSTALL_ROOT/config/.update-env.XXXXXX")"
     (umask 077; printf '%s\n' "# Used by $INSTALL_ROOT/bin/update.sh. root only." \
         "PGHOST=$DB_HOST" "PGPORT=$DB_PORT" "PGDATABASE=$DB_NAME" "PGUSER=$DB_USER" "PGPASSWORD=$DB_PASSWORD" \
-        "PGSSLMODE=$DB_SSLMODE" "PG_BIN=$PG_BIN" "HEALTH_URL=https://127.0.0.1:$CONSOLE_PORT/healthz" >"$tmp")
+        "PGSSLMODE=$DB_SSLMODE" "PG_BIN=$PG_BIN" "HEALTH_URL=$(health_url)" >"$tmp")
     chown root:root "$tmp"
     chmod 600 "$tmp"
     mv -T -- "$tmp" "$UPDATE_ENV"
@@ -568,13 +612,14 @@ write_state() {
     local tmp
     tmp="$(mktemp "$INSTALL_ROOT/config/.state.XXXXXX")"
     printf '%s\n' "DB_MODE=$DB_MODE" "DB_NAME=$DB_NAME" "DB_USER=$DB_USER" "SERVER_NAME=$SERVER_NAME" \
-        "CONSOLE_PORT=$CONSOLE_PORT" "INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$tmp"
+        "CONSOLE_PORT=$CONSOLE_PORT" "CONSOLE_MODE=$CONSOLE_MODE" "INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$tmp"
     chown root:root "$tmp"
     chmod 600 "$tmp"
     mv -T -- "$tmp" "$STATE_FILE"
 }
 
 setup_certificate() {
+    if [[ "$CONSOLE_MODE" == http ]]; then info "Console over plain HTTP: no certificate"; return 0; fi
     local pem="$INSTALL_ROOT/config/console.pem" key="$INSTALL_ROOT/config/console.key"
     if [[ -f "$pem" && -f "$key" ]]; then info "Keeping the existing Console certificate"; return 0; fi
     if [[ -z "$CERT_FILE" && $UNATTENDED -eq 0 ]]; then
@@ -643,10 +688,10 @@ start_services() {
     systemctl start domainnotice-update.path
     local i
     for ((i = 0; i < 40; i++)); do
-        if curl -fsk --max-time 5 "https://127.0.0.1:$CONSOLE_PORT/healthz" >/dev/null 2>&1; then return 0; fi
+        if curl -fsk --max-time 5 "$(health_url)" >/dev/null 2>&1; then return 0; fi
         sleep 3
     done
-    warn "the server did not answer on https://127.0.0.1:$CONSOLE_PORT/healthz yet (journalctl -u domainnotice)"
+    warn "the server did not answer on $(health_url) yet (journalctl -u domainnotice)"
 }
 
 configure_firewall() {
@@ -672,8 +717,13 @@ print_summary() {
     version="$(installed_version)"
     fp="$(run_server "$INSTALL_ROOT/current" --print-fingerprint 2>/dev/null | grep -E '^[0-9a-f]{64}$' | tail -n1 || true)"
     [[ -n "$fp" ]] || fp="<see Console: Settings>"
-    url="https://$SERVER_NAME/"
-    [[ "$CONSOLE_PORT" == 443 ]] || url="https://$SERVER_NAME:$CONSOLE_PORT/"
+    if [[ "$CONSOLE_MODE" == http ]]; then
+        url="http://$SERVER_NAME/"
+        [[ "$CONSOLE_PORT" == 80 ]] || url="http://$SERVER_NAME:$CONSOLE_PORT/"
+    else
+        url="https://$SERVER_NAME/"
+        [[ "$CONSOLE_PORT" == 443 ]] || url="https://$SERVER_NAME:$CONSOLE_PORT/"
+    fi
     cat <<EOF
 
 DomainNotice $version is installed.
@@ -695,9 +745,7 @@ EOF
 do_install() {
     ask SERVER_NAME "Server DNS name (used by browsers and agents)" "$(hostname -f 2>/dev/null || hostname)"
     [[ "$SERVER_NAME" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || die "invalid server name '$SERVER_NAME'"
-    ask CONSOLE_PORT "Console HTTPS port" 443
-    [[ "$CONSOLE_PORT" =~ ^[0-9]{1,5}$ ]] && ((CONSOLE_PORT >= 1 && CONSOLE_PORT <= 65535)) || die "invalid port '$CONSOLE_PORT'"
-    ((CONSOLE_PORT != AGENT_PORT)) || die "the Console port must differ from the agent port $AGENT_PORT"
+    collect_console_mode
     # Everything that can be missing in unattended mode is checked before the machine is changed.
     if [[ $UNATTENDED -eq 1 ]]; then
         [[ -n "$PACKAGE" || -n "$GITHUB_REPOSITORY" ]] || die "missing --package FILE (GitHub releases are not configured yet)"
@@ -737,6 +785,7 @@ do_repair() {
     info "Repairing DomainNotice $version (config and data are kept)"
     SERVER_NAME="$(read_state SERVER_NAME || hostname -f)"
     CONSOLE_PORT="$(read_state CONSOLE_PORT || echo 443)"
+    CONSOLE_MODE="$(read_state CONSOLE_MODE || echo https)"
     install_packages
     create_user
     fix_permissions
@@ -753,6 +802,7 @@ do_upgrade() {
     current="$(installed_version)" || die "no current release to upgrade"
     SERVER_NAME="$(read_state SERVER_NAME || hostname -f)"
     CONSOLE_PORT="$(read_state CONSOLE_PORT || echo 443)"
+    CONSOLE_MODE="$(read_state CONSOLE_MODE || echo https)"
     install_packages
     obtain_package
     dn_version_gt "$PKG_VERSION" "$current" || die "$PKG_VERSION is not newer than the installed $current (downgrades are not offered)"
@@ -789,9 +839,61 @@ do_upgrade() {
     print_summary
 }
 
-do_uninstall() {
-    [[ $EUID -eq 0 ]] || die "run as root: sudo $0"
-    info "Removing the DomainNotice program and units (config, data, backups and the database are kept)"
+backup_script() { # the installed backup.sh, or the one next to this install.sh (older installs)
+    if [[ -x "$INSTALL_ROOT/bin/backup.sh" ]]; then echo "$INSTALL_ROOT/bin/backup.sh"
+    elif [[ -f "$(dirname -- "${BASH_SOURCE[0]}")/backup.sh" ]]; then echo "$(dirname -- "${BASH_SOURCE[0]}")/backup.sh"
+    elif [[ -f "$INSTALL_ROOT/current/deploy/linux/backup.sh" ]]; then echo "$INSTALL_ROOT/current/deploy/linux/backup.sh"
+    else die "backup.sh not found; run --repair with a newer package"; fi
+}
+
+do_backup() {
+    [[ -f "$STATE_FILE" ]] || die "DomainNotice is not installed"
+    local -a args=(create)
+    [[ -z "$BACKUP_OUTPUT" ]] || args+=(--output "$BACKUP_OUTPUT")
+    bash "$(backup_script)" "${args[@]}"
+}
+
+do_restore() {
+    [[ -f "$STATE_FILE" ]] || die "DomainNotice is not installed here: install it first (same or newer version), then run --restore"
+    [[ -n "$RESTORE_FILE" ]] || die "--restore needs a backup file"
+    local -a args=(restore "$RESTORE_FILE")
+    if [[ $UNATTENDED -eq 1 ]]; then
+        [[ $ASSUME_YES -eq 1 ]] || die "--restore in unattended mode needs --yes"
+        args+=(--yes)
+    fi
+    bash "$(backup_script)" "${args[@]}"
+}
+
+do_reset_password() {
+    [[ -f "$STATE_FILE" ]] || die "DomainNotice is not installed"
+    local accounts
+    # The server CLI logs to stdout too: keep only the "name<TAB>enabled|disabled" lines.
+    accounts="$(run_server "$INSTALL_ROOT/current" --list-local-accounts 2>/dev/null | grep -E $'^[^\t ]+\t(enabled|disabled)$' || true)"
+    if [[ -z "$RESET_USER" ]]; then
+        [[ $UNATTENDED -eq 0 ]] || die "--reset-password needs a user name in unattended mode"
+        [[ -n "$accounts" ]] || die "there are no local accounts (create one in the Console: Settings, Local accounts)"
+        echo "Local accounts:"
+        printf '%s\n' "$accounts" | sed 's/\t/  (/; s/$/)/; s/^/  /'
+        tty_read RESET_USER "Account" "$(printf '%s\n' "$accounts" | head -n1 | cut -f1)"
+    fi
+    [[ "$RESET_USER" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] || die "invalid user name '$RESET_USER'"
+    if [[ -z "$ADMIN_PASSWORD" ]]; then
+        [[ $UNATTENDED -eq 0 ]] || die "missing ADMIN_PASSWORD (secrets file, stdin or DOMAINNOTICE_ADMIN_PASSWORD)"
+        while true; do
+            tty_secret ADMIN_PASSWORD "New password for $RESET_USER (at least 8 characters)" confirm
+            [[ ${#ADMIN_PASSWORD} -ge 8 ]] && break
+            echo "Too short." >/dev/tty
+        done
+    fi
+    [[ ${#ADMIN_PASSWORD} -ge 8 && "$ADMIN_PASSWORD" != *$'\n'* ]] || die "the password must be one line of at least 8 characters"
+    # The password goes through stdin, never the command line.
+    printf '%s\n' "$ADMIN_PASSWORD" | run_server "$INSTALL_ROOT/current" --reset-local-password "$RESET_USER" 2>&1 |
+        grep -vE '^(info|warn|dbug|trce): |^      ' || true
+    run_server "$INSTALL_ROOT/current" --list-local-accounts 2>/dev/null | grep -qiE "^${RESET_USER//./\\.}"$'\t''enabled$' ||
+        die "the password was not reset"
+}
+
+remove_program() { # program, units and service state; config, data, backups and the database stay
     systemctl disable --now domainnotice-update.path domainnotice.service 2>/dev/null || true
     systemctl stop domainnotice-update.service 2>/dev/null || true
     local u
@@ -799,63 +901,116 @@ do_uninstall() {
     systemctl daemon-reload
     rm -rf -- "${INSTALL_ROOT:?}/releases" "${INSTALL_ROOT:?}/bin"
     rm -f -- "$INSTALL_ROOT/current"
-    info "Kept: $INSTALL_ROOT/config, $INSTALL_ROOT/data, $INSTALL_ROOT/backups, the database and the $SERVICE_USER user"
 }
 
-do_purge() {
+do_uninstall() {
     [[ $EUID -eq 0 ]] || die "run as root: sudo $0"
+    if [[ $KEEP_DATA -eq 1 ]]; then
+        info "Removing the DomainNotice program and units (config, data, backups and the database are kept)"
+        remove_program
+        info "Kept: $INSTALL_ROOT/config, $INSTALL_ROOT/data, $INSTALL_ROOT/backups, the database and the $SERVICE_USER user"
+        return 0
+    fi
+
     local db_mode db_name db_user
     db_mode="$(read_state DB_MODE || true)"
     db_name="$(read_state DB_NAME || echo domainnotice)"
     db_user="$(read_state DB_USER || echo domainnotice)"
-    echo "This removes $INSTALL_ROOT completely (config, keys, data, backups), the $SERVICE_USER user"
-    if [[ "$db_mode" == local ]]; then echo "and the local database '$db_name' with its role '$db_user'."; fi
+    cat <<EOF
+
+  !!  Uninstalling DomainNotice removes EVERYTHING on this server:
+      - the program and its services
+      - $INSTALL_ROOT: configuration, the agent-link key (all agents would need reinstalling), data and backups
+      - the DATABASE '$db_name' with all announcements, confirmations, answers, computers and history
+EOF
+    if [[ "$db_mode" == local ]]; then echo "        (the local database and its role '$db_user' are dropped)"
+    elif [[ "$db_mode" == existing ]]; then echo "        (all tables in '$db_name' on the external PostgreSQL server are dropped)"; fi
+    echo "      This cannot be undone. Back up the database first if you may need it."
+    echo
+
+    local backup_file="$BACKUP_TO"
     if [[ $UNATTENDED -eq 1 ]]; then
-        [[ $ASSUME_YES -eq 1 ]] || die "--purge in unattended mode needs --yes"
-    else
-        local answer
-        read -r -p "Type 'purge' to confirm: " answer </dev/tty || die "not confirmed"
-        [[ "$answer" == purge ]] || die "not confirmed"
+        [[ $ASSUME_YES -eq 1 ]] || die "--uninstall in unattended mode needs --yes (and optionally --backup-to FILE)"
+    elif [[ -z "$backup_file" && -f "$UPDATE_ENV" ]]; then
+        if ask_yes_no "Create a backup (database, configuration, keys, program) before uninstalling?" y; then
+            tty_read backup_file "Backup file (outside $INSTALL_ROOT, which is deleted)" "/root/domainnotice-backup-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+        fi
     fi
-    do_uninstall
+    if [[ -n "$backup_file" ]]; then
+        [[ "$backup_file" == *.tar.gz ]] || backup_file="$backup_file.tar.gz"
+        [[ "$(readlink -m -- "$backup_file")" != "$INSTALL_ROOT"/* ]] || die "the backup must be outside $INSTALL_ROOT (it is deleted)"
+        BACKUP_OUTPUT="$backup_file"
+        do_backup || die "the backup failed; nothing was removed"
+    fi
+    if [[ $UNATTENDED -eq 0 ]]; then
+        local answer
+        read -r -p "Type 'uninstall' to remove DomainNotice and its database: " answer </dev/tty || die "not confirmed"
+        [[ "$answer" == uninstall ]] || die "not confirmed"
+    fi
+
+    info "Removing DomainNotice"
+    remove_program
     if [[ "$db_mode" == local ]] && command -v psql >/dev/null 2>&1; then
         [[ "$db_name" =~ ^[A-Za-z0-9_]+$ && "$db_user" =~ ^[A-Za-z0-9_]+$ ]] || die "unexpected database name in $STATE_FILE"
         runuser -u postgres -- psql -X -q -c "DROP DATABASE IF EXISTS \"$db_name\"" || warn "could not drop the database"
         runuser -u postgres -- psql -X -q -c "DROP ROLE IF EXISTS \"$db_user\"" || warn "could not drop the role"
-    elif [[ "$db_mode" == existing ]]; then
-        warn "the external database was not touched"
+    elif [[ "$db_mode" == existing && -f "$UPDATE_ENV" ]]; then
+        # The role owns the database: drop everything DomainNotice created in it.
+        ( set -a; while IFS= read -r line; do
+              [[ "$line" =~ ^(PGHOST|PGPORT|PGDATABASE|PGUSER|PGPASSWORD|PGSSLMODE)=(.*)$ ]] && printf -v "${BASH_REMATCH[1]}" '%s' "${BASH_REMATCH[2]}"
+          done <"$UPDATE_ENV"; set +a
+          psql -X -q -v ON_ERROR_STOP=1 -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;' ) ||
+            warn "could not clear the external database '$db_name'; drop it yourself"
     fi
     rm -rf -- "$INSTALL_ROOT"
     if id -u "$SERVICE_USER" >/dev/null 2>&1; then userdel "$SERVICE_USER" || warn "could not remove the user $SERVICE_USER"; fi
     info "DomainNotice was removed. PostgreSQL packages and firewall rules were left as they are."
+    [[ -z "$backup_file" ]] || info "Backup: $backup_file"
 }
 
 main() {
     parse_args "$@"
-    case "$MODE" in
-        uninstall) do_uninstall; return ;;
-        purge) do_purge; return ;;
-    esac
+    if [[ "$MODE" == uninstall ]]; then load_secrets; do_uninstall; return; fi
     check_system
     load_secrets
+    case "$MODE" in
+        backup) do_backup; return ;;
+        restore) do_restore; return ;;
+        reset-password) do_reset_password; return ;;
+    esac
     local installed=0
     if [[ -f "$STATE_FILE" ]]; then
         installed=1
     elif [[ -L "$INSTALL_ROOT/current" || -f "$CONFIG_FILE" ]]; then
         # A previous install stopped half way (install.state is written last). Start over; the config it wrote
         # is replaced (it may hold a database password that is no longer valid). data/ is kept.
-        [[ -z "$MODE" ]] || die "a previous installation did not finish; run without --$MODE to install again, or --purge"
+        [[ -z "$MODE" ]] || die "a previous installation did not finish; run without --$MODE to install again, or --uninstall"
         warn "a previous installation did not finish; installing again (its config is replaced, data/ is kept)"
         if [[ $UNATTENDED -eq 0 ]]; then ask_yes_no "Continue?" y || exit 0; fi
         rm -f -- "$CONFIG_FILE" "$UPDATE_ENV" "$INSTALL_ROOT/current"
     fi
     if [[ $installed -eq 1 ]]; then
         if [[ -z "$MODE" ]]; then
-            [[ $UNATTENDED -eq 0 ]] || die "DomainNotice is already installed: use --repair or --upgrade"
-            echo "DomainNotice $(installed_version || echo '?') is already installed. Config and data are never overwritten."
+            [[ $UNATTENDED -eq 0 ]] || die "DomainNotice is already installed: use --repair, --upgrade, --backup, --restore, --reset-password or --uninstall"
+            echo "DomainNotice $(installed_version || echo '?') is installed. What do you want to do?"
+            echo "  1) repair            (services, owners and modes; config and data are kept)"
+            echo "  2) upgrade           (to the package or release given)"
+            echo "  3) backup            (database, configuration, keys, program)"
+            echo "  4) restore a backup"
+            echo "  5) reset a local account's password"
+            echo "  6) uninstall         (removes everything, including the database)"
+            echo "  7) cancel"
             local choice
-            tty_read choice "1) repair  2) upgrade  3) cancel" 1
-            case "$choice" in 1) MODE=repair ;; 2) MODE=upgrade ;; *) exit 0 ;; esac
+            tty_read choice "Choice" 7
+            case "$choice" in
+                1) MODE=repair ;;
+                2) MODE=upgrade ;;
+                3) tty_read BACKUP_OUTPUT "Backup folder or .tar.gz file" "$INSTALL_ROOT/backups"; do_backup; return ;;
+                4) tty_read RESTORE_FILE "Backup file to restore"; do_restore; return ;;
+                5) do_reset_password; return ;;
+                6) do_uninstall; return ;;
+                *) exit 0 ;;
+            esac
         fi
     else
         [[ -z "$MODE" ]] || die "DomainNotice is not installed; run without --$MODE"

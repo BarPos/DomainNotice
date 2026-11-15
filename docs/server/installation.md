@@ -42,8 +42,9 @@ sudo DOMAINNOTICE_ADMIN_PASSWORD='…' ./install.sh --unattended --db=local \
 | `--db=local` | Install PostgreSQL on this machine, with a `domainnotice` role and database listening on localhost |
 | `--db=existing` | Use an existing PostgreSQL: `--db-host`, `--db-port`, `--db-name`, `--db-user`, `--db-sslmode` |
 | `--server-name NAME` | DNS name used by browsers and agents (default: `hostname -f`) |
-| `--console-port N` | Console HTTPS port (default 443) |
+| `--console-port N` | Console port (default 443 for `https`, 80 for `http`) |
 | `--cert`, `--cert-key` | An existing PEM certificate and key; without them a self-signed one is generated |
+| `--console-mode=https\|http` | `https` (default): the Console serves HTTPS with a certificate. `http`: plain HTTP, no certificate. |
 | `--admin-user NAME` | First local admin account |
 | `--open-firewall=yes\|no` | Open the Console port and 5150 when ufw is active |
 | `--secrets-file FILE` / `--secrets-stdin` | `KEY=VALUE` lines: `ADMIN_PASSWORD`, `DB_PASSWORD` (the file must be mode 600) |
@@ -58,6 +59,40 @@ or a hidden prompt.
 - If it is newer than 16, the script adds the PostgreSQL apt repository and installs the matching `postgresql-client`
   (needed for `pg_dump` backups).
 - The role must **own** the database, so that an update can restore a backup on rollback.
+
+## Console over HTTP
+
+`--console-mode=http` makes the Console serve plain HTTP, with no certificate. Use it when HTTPS is handled elsewhere,
+for example by a reverse proxy you run yourself, or on an isolated test network.
+
+```sh
+sudo ./install.sh --console-mode=http                 # interactive: asks for the HTTP port (default 80)
+sudo DOMAINNOTICE_ADMIN_PASSWORD='…' ./install.sh --unattended --db=local --console-mode=http --console-port 80 \
+     --server-name notice.example.com --admin-user admin
+```
+
+The installer writes `"Console": { "Urls": "http://0.0.0.0:80", "Certificate": "" }` and creates no certificate. The
+self-update health check uses `http://127.0.0.1:<port>/healthz`.
+
+{: .warning }
+Over plain HTTP, sign-in passwords and session cookies travel unencrypted. Use it only behind an HTTPS front end or on
+a trusted network.
+
+{: .important }
+The **agent link is not affected**. Agents always use TLS over raw TCP on port **5150**, with key pinning, and connect
+to the DomainNotice server directly. If you put a reverse proxy in front of the Console, do not route port 5150
+through it.
+
+If you put a reverse proxy in front of the Console:
+- it must allow **WebSocket upgrades**, because the Console is Blazor Server;
+- it should allow request bodies of about 300 MB, for the agent MSI upload;
+- optionally, set `Console:ForwardedHeaders:Enabled` to `true` and list the proxy in `KnownProxies`. Sign-in rate
+  limits and the audit log then see the real client IP.
+
+To switch an existing install:
+1. Change `Console:Urls` in `/opt/domainnotice/config/appsettings.Production.json`.
+2. Change `HEALTH_URL` in `/opt/domainnotice/config/update.env`.
+3. `sudo systemctl restart domainnotice`.
 
 ## What gets installed
 
@@ -79,15 +114,35 @@ The installer also installs these apt packages: `ca-certificates`, `curl`, `tar`
 
 Logs go to the journal: `journalctl -u domainnotice -f`.
 
-## Re-running, repair, uninstall
+## Maintenance: repair, upgrade, backup, restore, password reset, uninstall
+
+Running `sudo ./install.sh` on an installed server shows a menu:
+1. repair;
+2. upgrade;
+3. backup;
+4. restore a backup;
+5. reset a local account's password;
+6. uninstall;
+7. cancel.
+
+Each item also has a flag:
 
 | Command | Effect |
 |---|---|
-| `install.sh` on an installed server | Offers **repair** or **upgrade**; never overwrites config or data |
-| `install.sh --repair` | Re-applies the units, owners and modes |
+| `install.sh --repair` | Re-applies the units, owners and modes; never overwrites config or data |
 | `install.sh --upgrade --package FILE` | Installs a newer release through the same path as the Console's *Update now* |
-| `install.sh --uninstall` | Removes the program and the units; keeps config, data and the database |
-| `install.sh --purge` | Removes everything, including the local database and the service user; asks for confirmation (`--yes` when unattended) |
+| `install.sh --backup [--output PATH]` | Backs up the database, configuration, keys, data and the running program (see [Backup and restore](operations.md#backup-and-restore)) |
+| `install.sh --restore FILE` | Restores a backup on this server (asks for confirmation; `--yes` when unattended) |
+| `install.sh --reset-password [USER]` | Sets a new password for a local Console account and enables it. Without `USER` it lists the accounts and asks. Unattended: `DOMAINNOTICE_ADMIN_PASSWORD` or `--secrets-file`. |
+| `install.sh --uninstall` | Removes **everything**: program, services, `/opt/domainnotice` (config, keys, data, backups), the service user **and the database** |
+| `install.sh --uninstall --keep-data` | Removes only the program and its services; keeps config, data, backups and the database |
+
+{: .warning }
+`--uninstall` deletes the database with all announcements, confirmations, answers and history, and the agent-link key.
+After that, every agent would need reinstalling. The installer warns, offers to write a backup to a file outside
+`/opt/domainnotice` first, and asks you to type `uninstall`. Unattended runs need `--yes`, and can write the backup with
+`--backup-to FILE`. A local database is dropped together with its role. For an existing (external) database, every
+table DomainNotice created is dropped. `--purge` is an alias of `--uninstall`.
 
 ## After installing
 

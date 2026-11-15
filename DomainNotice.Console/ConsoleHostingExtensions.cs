@@ -4,6 +4,7 @@ using DomainNotice.Console.Services;
 using DomainNotice.Server.Abstractions;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
+using DomainNotice.Server.Options;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -32,12 +33,19 @@ public static class ConsoleHostingExtensions
             o.SnackbarConfiguration.VisibleStateDuration = 5000;
         });
 
+        // HTTPS-only Console: cookies are always Secure. When it also listens on plain HTTP (--console-mode=http, or
+        // behind an HTTPS proxy), cookies follow the request so that signing in over HTTP works.
+        var urls = config.GetSection(ConsoleOptions.Section).Get<ConsoleOptions>()?.Urls ?? "";
+        var cookieSecurity = urls.Contains("http://", StringComparison.OrdinalIgnoreCase)
+            ? CookieSecurePolicy.SameAsRequest
+            : CookieSecurePolicy.Always;
+
         services.AddAuthentication(ConsoleAuth.Scheme)
             .AddCookie(ConsoleAuth.Scheme, o =>
             {
                 o.Cookie.Name = ConsoleAuth.Scheme;
                 o.Cookie.HttpOnly = true;
-                o.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+                o.Cookie.SecurePolicy = cookieSecurity;
                 o.Cookie.SameSite = SameSiteMode.Strict;
                 o.Cookie.IsEssential = true;
                 o.SlidingExpiration = true;
@@ -63,7 +71,7 @@ public static class ConsoleHostingExtensions
         services.AddAntiforgery(o =>
         {
             o.Cookie.Name = "DomainNotice.Antiforgery";
-            o.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+            o.Cookie.SecurePolicy = cookieSecurity;
             o.Cookie.SameSite = SameSiteMode.Strict;
         });
 

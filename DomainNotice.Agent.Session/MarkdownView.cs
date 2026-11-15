@@ -12,7 +12,7 @@ using WpfList = System.Windows.Documents.List;
 namespace DomainNotice.Agent.Session;
 
 /// <summary>
-/// Converts announcement Markdown into a WPF FlowDocument (ported from OpenNotifier). Raw HTML is disabled, images
+/// Converts announcement Markdown into a WPF FlowDocument. Raw HTML is disabled, images
 /// are not loaded (their alt text is shown), and only http/https links are clickable; they open in the browser.
 /// </summary>
 internal static class MarkdownView

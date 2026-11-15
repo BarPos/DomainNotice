@@ -19,10 +19,10 @@ using WpfRichTextBox = System.Windows.Controls.RichTextBox;
 namespace DomainNotice.Agent.Session;
 
 /// <summary>
-/// The announcement window (ported from OpenNotifier, plan 5.2): always on top, no close button, Esc and Alt+F4
+/// The announcement window (plan 5.2): always on top, no close button, Esc and Alt+F4
 /// swallowed, closing cancelled unless the server accepted the confirmation or the delivery was withdrawn.
 /// Buttons unlock by <see cref="DismissRules"/>; Markdown is rendered; questions are radio buttons (single) or
-/// check boxes (multiple). Unlike OpenNotifier the window does not close on click: it waits for ConfirmResult.
+/// check boxes (multiple). The window does not close on click: it waits for ConfirmResult.
 /// </summary>
 internal sealed class AnnouncementWindow : Window
 {

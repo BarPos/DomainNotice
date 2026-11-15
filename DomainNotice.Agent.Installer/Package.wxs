@@ -128,7 +128,7 @@
     </Component>
 
     <!-- %ProgramData%\DomainNotice (logs, updates): SYSTEM + Administrators only, inheritance broken (plan 3.2).
-         OpenNotifier gave Users full control here; that does not carry over. -->
+         Users get no access here. -->
     <Component Id="DataFolderComponent" Directory="DATAFOLDER">
       <CreateFolder>
         <PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />

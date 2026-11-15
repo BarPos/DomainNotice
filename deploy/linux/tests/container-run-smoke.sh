@@ -24,7 +24,7 @@ check() { local d="$1"; shift; if "$@"; then echo "ok   - $d"; else echo "FAIL -
 owner() { [[ "$(stat -c '%a %U' "$1")" == "$2" ]] || { echo "     $1 is $(stat -c '%a %U' "$1"), expected $2"; return 1; }; }
 
 case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; esac
-pkg="$(ls /pkg/DomainNotice.Server-*-linux-$arch.tar.gz | head -n1)"
+pkg="$(ls /pkg/DomainNotice.Server-*-linux-$arch.tar.gz | sort -V | tail -n1)"
 echo "# package $pkg"
 
 cat >/usr/local/bin/systemctl <<'STUB'

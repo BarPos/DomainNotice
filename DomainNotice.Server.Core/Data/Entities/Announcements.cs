@@ -119,7 +119,7 @@ public class Delivery
     public DateTime? WithdrawnAtUtc { get; set; }
 }
 
-/// <summary>Read confirmation (OpenNotifier's Acknowledgement). Always stored, also for anonymous answers (plan 8.4).</summary>
+/// <summary>Read confirmation. Always stored, also for anonymous answers (plan 8.4).</summary>
 public class Confirmation
 {
     public Guid Id { get; set; }

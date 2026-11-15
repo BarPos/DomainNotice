@@ -27,7 +27,7 @@ check() { local d="$1"; shift; if "$@"; then echo "ok   - $d"; else echo "FAIL -
 mode_owner() { [[ "$(stat -c '%a %U:%G' "$1")" == "$2" ]] || { echo "     $1 is $(stat -c '%a %U:%G' "$1"), expected $2"; return 1; }; }
 
 case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; esac
-pkg="$(ls /pkg/DomainNotice.Server-*-linux-$arch.tar.gz | head -n1)"
+pkg="$(ls /pkg/DomainNotice.Server-*-linux-$arch.tar.gz | sort -V | tail -n1)"
 version="$(basename "$pkg" | sed -E 's/^DomainNotice\.Server-([0-9.]+)-linux-.*/\1/')"
 echo "# package $pkg ($version)"
 
@@ -80,7 +80,7 @@ check "service user has no shell"    [ "$(getent passwd domainnotice | cut -d: -
 check "self-signed cert has SAN"     bash -c "openssl x509 -in $R/config/console.pem -noout -ext subjectAltName | grep -q 'DNS:dn.example.test'"
 check "cert matches key"             [ "$(openssl x509 -in $R/config/console.pem -noout -pubkey)" == "$(openssl pkey -in $R/config/console.key -pubout)" ]
 apt-get install -y -q jq >/dev/null 2>&1
-check "appsettings is valid JSON"    jq -e '.ConnectionStrings.Default and .Paths.Data == "/opt/domainnotice/data" and .Updates.GitHubRepository == "" and .Agents.Port == 5150' "$R/config/appsettings.Production.json" >/dev/null
+check "appsettings is valid JSON"    bash -c "jq -e '.ConnectionStrings.Default and .Paths.Data == \"/opt/domainnotice/data\" and .Updates.GitHubRepository == \"BarPos/DomainNotice\" and .Agents.Port == 5150 and .Console.Urls == \"https://0.0.0.0:443\"' $R/config/appsettings.Production.json >/dev/null"
 check "summary shows msiexec line"   grep -q 'msiexec /i DomainNotice.Agent-.*-x64.msi SERVERHOST=dn.example.test SERVERPORT=5150 SERVERFINGERPRINT=' /tmp/install.log
 pw="$(sed -n 's/^PGPASSWORD=//p' $R/config/update.env)"
 check "local db: role owns database" [ "$(PGPASSWORD="$pw" psql -X -At -h 127.0.0.1 -U domainnotice -d domainnotice -c "select pg_get_userbyid(datdba) from pg_database where datname='domainnotice'")" == domainnotice ]
@@ -159,8 +159,8 @@ check "repair: config mode restored"    mode_owner "$R/config/appsettings.Produc
 check "repair: data mode restored"      mode_owner "$R/data" "700 domainnotice:domainnotice"
 check "repair: update.sh restored"      mode_owner "$R/bin/update.sh" "755 root:root"
 
-# 6) --uninstall keeps config, data and the database; --purge removes everything after confirmation.
-bash /src/install.sh --uninstall >/tmp/uninstall.log 2>&1
+# 6) --uninstall --keep-data keeps config, data and the database; --uninstall (alias --purge) removes everything.
+bash /src/install.sh --uninstall --keep-data >/tmp/uninstall.log 2>&1
 check "uninstall: releases removed"     [ ! -e "$R/releases" ]
 check "uninstall: current removed"      [ ! -L "$R/current" ]
 check "uninstall: units removed"        [ ! -e /etc/systemd/system/domainnotice.service ]

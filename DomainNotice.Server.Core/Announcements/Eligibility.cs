@@ -191,7 +191,7 @@ public static class Eligibility
     }
 }
 
-/// <summary>Name matching when there is no directory (OpenNotifier's IdentityMatch).</summary>
+/// <summary>Name matching when there is no directory.</summary>
 public static class IdentityMatch
 {
     /// <summary>"CORP\alice" → "alice", "alice@corp" → "alice", "alice" → "alice".</summary>

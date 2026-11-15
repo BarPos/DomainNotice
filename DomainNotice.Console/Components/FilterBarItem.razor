@@ -1,0 +1,252 @@
+@using System.Globalization
+@inject BrowserClock Clock
+@*
+    One editable filter in the grid's filter bar (ESET PROTECT style): the field label, an optional condition, the value
+    input and a remove button. Text, number and day counts apply on Enter (or the ↵ button); lists, yes/no and date
+    ranges apply as soon as they change. Applying an empty value un-applies the filter but keeps it in the bar.
+*@
+
+<div class="@($"dn-filter {(Dirty ? "dn-filter-dirty" : "")} {(Applied is null ? "dn-filter-draft" : "")}")">
+    <span class="dn-filter-label">@Field.Label</span>
+
+    @if (Field.Ops.Count > 1)
+    {
+        <MudSelect T="FilterOp" Value="_op" ValueChanged="OpChangedAsync" Dense="true" Variant="Variant.Text" Margin="Margin.Dense"
+                   Class="dn-filter-op" aria-label="@($"{Field.Label} condition")">
+            @foreach (var op in Field.Ops)
+            {
+                <MudSelectItem Value="@op">@OpLabel(op)</MudSelectItem>
+            }
+        </MudSelect>
+    }
+
+    @switch (Field.Kind)
+    {
+        case FieldKind.Text:
+            <MudTextField @ref="_textField" T="string" @bind-Value="_text" Immediate="true" Variant="Variant.Text" Margin="Margin.Dense"
+                          Placeholder="type, then Enter" AutoFocus="AutoFocus" Class="dn-filter-input" OnKeyDown="KeyDownAsync"
+                          Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.KeyboardReturn" OnAdornmentClick="ApplyAsync"
+                          AdornmentAriaLabel="Apply filter" aria-label="@Field.Label" />
+            break;
+
+        case FieldKind.Number:
+            <MudNumericField @ref="_numberField" T="double?" @bind-Value="_number" Immediate="true" Variant="Variant.Text" Margin="Margin.Dense"
+                             Placeholder="number, then Enter" AutoFocus="AutoFocus" Class="dn-filter-input dn-filter-narrow" OnKeyDown="KeyDownAsync"
+                             HideSpinButtons="true" aria-label="@Field.Label" />
+            break;
+
+        case FieldKind.Choice:
+            <MudSelect @ref="_choiceSelect" T="string" MultiSelection="true" SelectedValues="_choices" SelectedValuesChanged="ChoicesChangedAsync"
+                       Dense="true" Variant="Variant.Text" Margin="Margin.Dense" Placeholder="any" Class="dn-filter-input"
+                       ToStringFunc="@(v => Field.Options.FirstOrDefault(o => o.Value == v)?.Label ?? v)" aria-label="@Field.Label">
+                @foreach (var o in Field.Options)
+                {
+                    <MudSelectItem Value="@o.Value">@o.Label</MudSelectItem>
+                }
+            </MudSelect>
+            break;
+
+        case FieldKind.Bool:
+            <MudSelect @ref="_boolSelect" T="string" Value="_text" ValueChanged="BoolChangedAsync" Dense="true" Variant="Variant.Text"
+                       Margin="Margin.Dense" Placeholder="any" Class="dn-filter-input dn-filter-narrow" aria-label="@Field.Label">
+                @foreach (var o in Field.Options)
+                {
+                    <MudSelectItem Value="@o.Value">@o.Label</MudSelectItem>
+                }
+            </MudSelect>
+            break;
+
+        case FieldKind.Date when _op is FilterOp.OlderThanDays or FilterOp.WithinDays:
+            <MudNumericField @ref="_daysField" T="int?" @bind-Value="_days" Immediate="true" Min="0" Max="36500" Variant="Variant.Text"
+                             Margin="Margin.Dense" Placeholder="days, then Enter" AutoFocus="AutoFocus" Class="dn-filter-input dn-filter-narrow"
+                             OnKeyDown="KeyDownAsync" HideSpinButtons="true" aria-label="@($"{Field.Label} days")" />
+            <span class="dn-filter-unit">days</span>
+            break;
+
+        case FieldKind.Date:
+            <MudDatePicker Date="_from" DateChanged="FromChangedAsync" Placeholder="@($"from ({Clock.ZoneLabel})")" Variant="Variant.Text"
+                           Margin="Margin.Dense" Clearable="true" DateFormat="yyyy-MM-dd" Class="dn-filter-input dn-filter-date" aria-label="@($"{Field.Label} from")" />
+            <MudDatePicker Date="_to" DateChanged="ToChangedAsync" Placeholder="@($"to ({Clock.ZoneLabel})")" Variant="Variant.Text"
+                           Margin="Margin.Dense" Clearable="true" DateFormat="yyyy-MM-dd" Class="dn-filter-input dn-filter-date" aria-label="@($"{Field.Label} to")" />
+            break;
+    }
+
+    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="OnRemove" Class="dn-filter-remove"
+                   aria-label="@($"Remove the {Field.Label} filter")" />
+</div>
+
+@code {
+    [Parameter, EditorRequired] public GridFieldInfo Field { get; set; } = default!;
+    /// <summary>The clause currently applied (in the URL), or null for a filter that was added but not applied yet.</summary>
+    [Parameter] public FilterClause? Applied { get; set; }
+    [Parameter] public bool AutoFocus { get; set; }
+    /// <summary>Raised with the new clause, or null when the value is empty (the filter stays in the bar, unapplied).</summary>
+    [Parameter] public EventCallback<FilterClause?> OnApply { get; set; }
+    [Parameter] public EventCallback OnRemove { get; set; }
+
+    private FilterClause? _loadedFrom;
+    private bool _initialized;
+    private FilterOp _op;
+    private string? _text;
+    private double? _number;
+    private int? _days;
+    private DateTime? _from;
+    private DateTime? _to;
+    private IReadOnlyCollection<string> _choices = [];
+
+    private MudTextField<string>? _textField;
+    private MudNumericField<double?>? _numberField;
+    private MudNumericField<int?>? _daysField;
+    private MudSelect<string>? _choiceSelect;
+    private MudSelect<string>? _boolSelect;
+
+    /// <summary>The typed value differs from what is applied (shown as a highlighted border until Enter).</summary>
+    private bool Dirty => !Equals(Build(), Applied);
+
+    protected override void OnParametersSet()
+    {
+        // Load the editor from the applied clause the first time, and whenever the URL changed it from outside
+        // (back button, another filter); never overwrite what the user is typing otherwise.
+        if (_initialized && Equals(Applied, _loadedFrom)) return;
+        _initialized = true;
+        _loadedFrom = Applied;
+        Load(Applied);
+    }
+
+    private void Load(FilterClause? clause)
+    {
+        _op = clause?.Op ?? DefaultOp();
+        _text = null; _number = null; _days = null; _from = null; _to = null; _choices = [];
+        if (clause is null)
+        {
+            if (Field.Kind == FieldKind.Date && _op is FilterOp.OlderThanDays or FilterOp.WithinDays) _days = null;
+            return;
+        }
+        switch (Field.Kind)
+        {
+            case FieldKind.Text:
+            case FieldKind.Bool:
+                _text = clause.Value;
+                break;
+            case FieldKind.Number:
+                _number = clause.ParseDouble();
+                break;
+            case FieldKind.Choice:
+                _choices = clause.ParseList().ToHashSet();
+                break;
+            case FieldKind.Date when clause.Op is FilterOp.OlderThanDays or FilterOp.WithinDays:
+                _days = clause.ParseInt();
+                break;
+            case FieldKind.Date:
+                var (from, to) = clause.ParseRange();
+                _from = from is { } f ? Clock.ToLocal(f).Date : null;
+                _to = to is { } t ? Clock.ToLocal(t).Date : null;
+                break;
+        }
+    }
+
+    private FilterOp DefaultOp() => Field.Ops.FirstOrDefault();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // A filter just picked from "Add filter" (or a column's funnel) gets the cursor, so the user can type at once.
+        // AutoFocus alone does not focus inputs that appear after the page was rendered.
+        if (firstRender && AutoFocus)
+        {
+            // The "Add filter" menu hands focus back to its button when it closes; focus after that has happened.
+            await Task.Delay(200);
+            try { await FocusAsync(); }
+            catch (Exception ex) when (ex is JSDisconnectedException or ObjectDisposedException or TaskCanceledException) { }
+        }
+    }
+
+    /// <summary>Focuses the value input (used when the column's filter icon is clicked for a filter already in the bar).</summary>
+    public async Task FocusAsync()
+    {
+        if (_textField is not null) await _textField.FocusAsync();
+        else if (_numberField is not null) await _numberField.FocusAsync();
+        else if (_daysField is not null) await _daysField.FocusAsync();
+        else if (_choiceSelect is not null) await _choiceSelect.OpenMenu();
+        else if (_boolSelect is not null) await _boolSelect.OpenMenu();
+    }
+
+    /// <summary>The clause for the current input, or null when it is empty or invalid.</summary>
+    private FilterClause? Build()
+    {
+        string? value = Field.Kind switch
+        {
+            FieldKind.Text => string.IsNullOrWhiteSpace(_text) ? null : _text.Trim(),
+            FieldKind.Bool => string.IsNullOrEmpty(_text) ? null : _text,
+            FieldKind.Choice => _choices.Any() ? string.Join('|', _choices.OrderBy(c => c, StringComparer.Ordinal)) : null,
+            FieldKind.Number => _number?.ToString(CultureInfo.InvariantCulture),
+            FieldKind.Date when _op is FilterOp.OlderThanDays or FilterOp.WithinDays => _days is >= 0 ? _days.Value.ToString(CultureInfo.InvariantCulture) : null,
+            FieldKind.Date => _from is null && _to is null
+                ? null
+                : FilterClause.FormatRange(
+                    _from is { } f ? Clock.ToUtc(f.Date) : null,
+                    _to is { } t ? Clock.ToUtc(t.Date.AddDays(1).AddSeconds(-1)) : null),
+            _ => null,
+        };
+        return value is null ? null : new FilterClause(Field.Key, _op, value);
+    }
+
+    private async Task ApplyAsync()
+    {
+        var clause = Build();
+        if (Equals(clause, Applied)) return;
+        _loadedFrom = clause; // the URL will come back with this clause: keep the input as typed
+        await OnApply.InvokeAsync(clause);
+    }
+
+    private Task KeyDownAsync(KeyboardEventArgs e) =>
+        e.Key is "Enter" or "NumpadEnter" ? ApplyAsync() : Task.CompletedTask;
+
+    private async Task OpChangedAsync(FilterOp op)
+    {
+        var wasDays = _op is FilterOp.OlderThanDays or FilterOp.WithinDays;
+        _op = op;
+        var isDays = op is FilterOp.OlderThanDays or FilterOp.WithinDays;
+        if (Field.Kind == FieldKind.Date && wasDays != isDays)
+        {
+            _days = null; _from = null; _to = null;
+        }
+        // Changing the condition of a filter that has a value re-applies it at once (or un-applies an emptied one).
+        if (Build() is not null || Applied is not null) await ApplyAsync();
+    }
+
+    private async Task ChoicesChangedAsync(IReadOnlyCollection<string>? values)
+    {
+        _choices = values?.ToHashSet() ?? new HashSet<string>();
+        await ApplyAsync();
+    }
+
+    private async Task BoolChangedAsync(string? value)
+    {
+        _text = value;
+        await ApplyAsync();
+    }
+
+    private async Task FromChangedAsync(DateTime? date)
+    {
+        _from = date;
+        await ApplyAsync();
+    }
+
+    private async Task ToChangedAsync(DateTime? date)
+    {
+        _to = date;
+        await ApplyAsync();
+    }
+
+    public static string OpLabel(FilterOp op) => op switch
+    {
+        FilterOp.Contains => "contains",
+        FilterOp.Equals => "is",
+        FilterOp.Between => "between",
+        FilterOp.OlderThanDays => "older than",
+        FilterOp.WithinDays => "within the last",
+        FilterOp.AtLeast => "at least",
+        FilterOp.AtMost => "at most",
+        _ => op.ToString(),
+    };
+}

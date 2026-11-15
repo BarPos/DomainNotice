@@ -49,6 +49,12 @@ nav_order: 11
 - **Times shown per user** has already been reached, or the **repeat interval** has not passed yet.
 - Only Active and Locked sessions receive windows; disconnected RDP sessions get them on reconnect.
 
+## Forgotten local password, or locked out
+
+Run `sudo ./install.sh --reset-password` on the server. It lists the local accounts, asks which one, and sets a new
+password; it also enables the account if it was disabled. `install.sh` is in
+`/opt/domainnotice/current/deploy/linux/`. Failed sign-in limits reset when the server restarts.
+
 ## Domain sign-in fails
 
 - The user must be in `Directory:AdminGroups` or `ViewerGroups`, directly or through nested groups. Primary-group

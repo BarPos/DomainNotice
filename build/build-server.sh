@@ -51,7 +51,7 @@ else
     TAR_CREATE=(tar --uid 0 --gid 0 --uname root --gname root --no-xattrs --no-mac-metadata --no-acls -czf)
 fi
 
-DEPLOY_FILES=(install.sh update.sh domainnotice.service domainnotice-update.path domainnotice-update.service)
+DEPLOY_FILES=(install.sh update.sh backup.sh domainnotice.service domainnotice-update.path domainnotice-update.service)
 for f in "${DEPLOY_FILES[@]}"; do [[ -f "$ROOT/deploy/linux/$f" ]] || die "missing deploy/linux/$f"; done
 
 if [[ $SUMS_ONLY -eq 0 ]]; then
@@ -75,7 +75,7 @@ if [[ $SUMS_ONLY -eq 0 ]]; then
         if find "$pub" ! -type f ! -type d | grep -q .; then die "publish output contains links or special files"; fi
         find "$pub" -type d -exec chmod 755 {} +
         find "$pub" -type f -exec chmod 644 {} +
-        chmod 755 "$pub/DomainNotice.Server" "$pub/deploy/linux/install.sh" "$pub/deploy/linux/update.sh"
+        chmod 755 "$pub/DomainNotice.Server" "$pub/deploy/linux/install.sh" "$pub/deploy/linux/update.sh" "$pub/deploy/linux/backup.sh"
         find "$pub" -type f -name '*.so' -exec chmod 755 {} +
         [[ -f "$pub/createdump" ]] && chmod 755 "$pub/createdump"
 

@@ -10,8 +10,7 @@ has_children: true
 1. TOC
 {:toc}
 
-The Console is the web management panel at `https://<server>/`. It works like a management console such as ESET
-PROTECT:
+The Console is the web management panel at `https://<server>/`:
 - a dark navigation bar on the left;
 - a tree of groups, then a data grid, then a details page with tabs;
 - an action bar for the selected rows.
@@ -50,7 +49,8 @@ account only while no directory is configured and no local account exists; other
 ## Grids, search and filters
 
 Every list uses the same server-side grid:
-- **filter chips**, e.g. *Name contains pc-12* or *Last seen older than 7 days*;
+- **editable filters**: **Add filter** → pick a field → type and press Enter (lists apply on selection). Change the
+  value in place to refine it, or × to remove it. The funnel in a column header adds or focuses that column's filter;
 - free-text search;
 - per-column filters (text, date ranges, options);
 - sorting, paging and a column chooser;

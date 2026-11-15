@@ -69,7 +69,7 @@ msiexec /i DomainNotice.Agent-1.0.0-x64.msi /qn SERVERHOST=server.example.local 
 ```
 
 The **DomainNotice Agent** service starts at once and on every boot. The PC appears under **Computers** within a
-few seconds. Mass deployment with GPO or Intune is covered in [Agent deployment](agent/index.md#mass-deployment).
+few seconds. Mass deployment (GPO or a software distribution tool) is covered in [Agent deployment](agent/index.md#mass-deployment).
 
 ## 5. Send the first announcement
 

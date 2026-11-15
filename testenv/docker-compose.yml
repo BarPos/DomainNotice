@@ -30,7 +30,7 @@ services:
         ipv4_address: 10.250.50.10
         aliases: [dc.corp.test]
     ports:
-      - "636:636"               # LDAPS, for inspecting the directory from the host (ldapsearch / Apache Directory Studio)
+      - "636:636"               # LDAPS, for inspecting the directory from the host (e.g. ldapsearch)
 
   server:
     build: ./server

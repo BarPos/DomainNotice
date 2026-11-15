@@ -11,6 +11,22 @@ public sealed class ConsoleOptions
     /// <summary>PEM certificate path. Empty = development certificate.</summary>
     public string Certificate { get; set; } = "";
     public string CertificateKey { get; set; } = "";
+    /// <summary>Optional: trust X-Forwarded-* headers (only needed when something forwards requests to the Console).</summary>
+    public ForwardedHeadersSettings ForwardedHeaders { get; set; } = new();
+}
+
+/// <summary>
+/// Console:ForwardedHeaders (off by default). When enabled, X-Forwarded-For / -Proto / -Host from the listed
+/// addresses are honoured, so the client IP (sign-in rate limits, audit log) and the original https scheme are known
+/// when the Console is reached through a forwarding server. Agents never use this: they connect to Agents:Port.
+/// </summary>
+public sealed class ForwardedHeadersSettings
+{
+    public bool Enabled { get; set; }
+    /// <summary>IP addresses whose forwarded headers are trusted. Loopback is always trusted.</summary>
+    public List<string> KnownProxies { get; set; } = [];
+    /// <summary>Networks (CIDR, e.g. 10.0.0.0/24) whose forwarded headers are trusted.</summary>
+    public List<string> KnownNetworks { get; set; } = [];
 }
 
 public sealed class PathsOptions

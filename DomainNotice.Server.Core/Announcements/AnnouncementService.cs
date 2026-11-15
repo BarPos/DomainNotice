@@ -168,7 +168,7 @@ internal sealed class AnnouncementService(
             case TargetKind.OrganizationalUnit:
                 if (DirectoryConfigured)
                     return t.DirectoryObjectGuid is null ? $"Target {n}: choose it from the directory." : null;
-                // Without a directory these are accepted but never match (as in OpenNotifier).
+                // Without a directory these are accepted but never match.
                 return t.DirectoryObjectGuid is null && !hasValue ? $"Target {n}: nothing selected." : null;
             default:
                 return $"Target {n}: unknown target type.";

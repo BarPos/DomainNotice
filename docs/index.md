@@ -35,11 +35,15 @@ which button they clicked and how they answered optional questions; answers can 
   - TLS over raw TCP (no HTTP), with key pinning on both sides.
   - An optional install password for enrolment.
   - A computer is identified only by its key.
+- **Operations:**
+  - One-command backup and restore of the database, configuration, keys and program.
+  - Password reset for local accounts, and a clean uninstall, from the installer.
+  - The Console is served over HTTPS, or plain HTTP when something in front of it handles HTTPS.
 - **Updates:**
   - A Console button updates the server (Ubuntu), with automatic rollback.
   - The server pushes agent updates and streams the MSI to the agents itself.
 - **Console:**
-  - An ESET-PROTECT-style layout: a tree, server-side grids with filter chips, bookmarkable views and CSV export.
+  - A tree of groups, server-side grids with editable filters, bookmarkable views and CSV export.
   - Roles: Admin and read-only Viewer.
   - Audit log.
 

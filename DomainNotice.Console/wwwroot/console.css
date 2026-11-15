@@ -26,9 +26,20 @@ body { margin: 0; }
 .dn-grid { position: relative; }
 .dn-grid-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; }
 .dn-grid-search { max-width: 320px; }
-.dn-grid-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 0 12px 8px; }
-.dn-grid-editor { padding: 12px; margin: 0 12px 8px; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
-.dn-grid-editor > * { min-width: 160px; }
+/* Filter bar: one editable box per filter (label, condition, value, ×). */
+.dn-filterbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 0 12px 8px; }
+.dn-filter { display: inline-flex; align-items: center; gap: 6px; padding: 0 2px 0 10px; min-height: 36px;
+             border: 1px solid var(--mud-palette-lines-inputs); border-radius: 6px; background: var(--mud-palette-surface); }
+.dn-filter-dirty { border-color: var(--mud-palette-warning); }
+.dn-filter-draft { border-style: dashed; }
+.dn-filter-label { font-size: 0.8rem; font-weight: 600; white-space: nowrap; opacity: 0.85; }
+.dn-filter-unit { font-size: 0.8rem; opacity: 0.7; }
+.dn-filter .mud-input-control { margin: 0 !important; }
+.dn-filter .mud-input.mud-input-underline:before, .dn-filter .mud-input.mud-input-underline:after { border-bottom: none !important; }
+.dn-filter-op { width: 132px; flex: 0 0 auto; }
+.dn-filter-input { width: 180px; flex: 0 0 auto; }
+.dn-filter-narrow { width: 110px; }
+.dn-filter-date { width: 150px; }
 .dn-grid table { width: 100%; }
 .dn-grid th { white-space: nowrap; user-select: none; }
 .dn-grid th.dn-sortable { cursor: pointer; }
