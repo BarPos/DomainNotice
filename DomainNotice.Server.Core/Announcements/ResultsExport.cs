@@ -55,7 +55,7 @@ internal sealed class ResultsExport(IDbContextFactory<AppDbContext> dbFactory) :
         AppendRow(sb, "Announcement", "User", "Computer", "Time", "Button");
         foreach (var r in rows)
             AppendRow(sb, title, r.UserName, r.ComputerName, Display(r.ConfirmedAtUtc), r.ButtonLabel);
-        return Utf8Bom.GetBytes(sb.ToString());
+        return Encode(sb);
     }
 
     public async Task<byte[]> ExportAnswersCsvAsync(Guid announcementId, CancellationToken ct = default)
@@ -67,7 +67,7 @@ internal sealed class ResultsExport(IDbContextFactory<AppDbContext> dbFactory) :
         if (a is null)
         {
             AppendRow(sb, "Question", "Selected options");
-            return Utf8Bom.GetBytes(sb.ToString());
+            return Encode(sb);
         }
         var questionOrder = a.Questions.ToDictionary(q => q.Id, q => q.SortOrder);
 
@@ -83,7 +83,7 @@ internal sealed class ResultsExport(IDbContextFactory<AppDbContext> dbFactory) :
                          .Select(x => (Question: x.QuestionPrompt, Selected: string.Join("; ", x.Selections)))
                          .OrderBy(x => x.Question, StringComparer.Ordinal).ThenBy(x => x.Selected, StringComparer.Ordinal))
                 AppendRow(sb, r.Question, r.Selected);
-            return Utf8Bom.GetBytes(sb.ToString());
+            return Encode(sb);
         }
 
         var named = await db.Answers.AsNoTracking()
@@ -102,7 +102,7 @@ internal sealed class ResultsExport(IDbContextFactory<AppDbContext> dbFactory) :
         foreach (var r in named.OrderBy(x => x.ConfirmedAtUtc).ThenBy(x => x.UserName, StringComparer.Ordinal)
                      .ThenBy(x => questionOrder.GetValueOrDefault(x.QuestionId, int.MaxValue)).ThenBy(x => x.QuestionPrompt, StringComparer.Ordinal))
             AppendRow(sb, r.UserName, r.ComputerName, Display(r.ConfirmedAtUtc), r.QuestionPrompt, string.Join("; ", r.Selections));
-        return Utf8Bom.GetBytes(sb.ToString());
+        return Encode(sb);
     }
 
     public async Task<AnnouncementResultsSummary?> GetSummaryAsync(Guid announcementId, CancellationToken ct = default)
@@ -137,6 +137,9 @@ internal sealed class ResultsExport(IDbContextFactory<AppDbContext> dbFactory) :
                 q.Options.OrderBy(o => o.SortOrder).Select(o => new OptionSummary(o.Id, o.Label, o.Hidden, optionCounts.GetValueOrDefault(o.Id))).ToList()))
                 .ToList());
     }
+
+    /// <summary>UTF-8 with BOM (GetBytes alone does not write the preamble).</summary>
+    private static byte[] Encode(StringBuilder sb) => [.. Utf8Bom.GetPreamble(), .. Utf8Bom.GetBytes(sb.ToString())];
 
     private static void AppendRow(StringBuilder sb, params string?[] fields)
     {
