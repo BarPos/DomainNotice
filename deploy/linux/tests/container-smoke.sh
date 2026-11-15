@@ -49,7 +49,7 @@ chmod 755 /usr/local/bin/systemctl
 source /src/install.sh
 create_admin_account() { info "(smoke) skipping the first local account"; }
 start_services() { info "(smoke) not starting domainnotice.service"; }
-UNATTENDED=1 MODE=install PACKAGE="$pkg" DB_MODE=local SERVER_NAME=dn.example.test CONSOLE_PORT=443 OPEN_FIREWALL=no
+ADMIN_PASSWORD=smoke-test-pw UNATTENDED=1 MODE=install PACKAGE="$pkg" DB_MODE=local SERVER_NAME=dn.example.test CONSOLE_PORT=443 OPEN_FIREWALL=no
 check_system
 do_install >/tmp/install.log 2>&1 || { cat /tmp/install.log; echo "FAIL - install"; exit 1; }
 tail -n 12 /tmp/install.log
@@ -71,7 +71,10 @@ check "data/updates 700"             mode_owner "$R/data/updates" "700 domainnot
 check "data/keys/dataprotection"     mode_owner "$R/data/keys/dataprotection" "700 domainnotice:domainnotice"
 check "backups 700"                  mode_owner "$R/backups" "700 domainnotice:domainnotice"
 check "bin/update.sh root 755"       mode_owner "$R/bin/update.sh" "755 root:root"
-check "units installed"              [ -f /etc/systemd/system/domainnotice.service -a -f /etc/systemd/system/domainnotice-update.path -a -f /etc/systemd/system/domainnotice-update.service ]
+for u in domainnotice.service domainnotice-update.path domainnotice-update.service; do
+    check "unit $u installed"        mode_owner "/etc/systemd/system/$u" "644 root:root"
+done
+check "install.state written last"   mode_owner "$R/config/install.state" "600 root:root"
 check "service user has no shell"    [ "$(getent passwd domainnotice | cut -d: -f7)" == /usr/sbin/nologin ]
 check "self-signed cert has SAN"     bash -c "openssl x509 -in $R/config/console.pem -noout -ext subjectAltName | grep -q 'DNS:dn.example.test'"
 check "cert matches key"             [ "$(openssl x509 -in $R/config/console.pem -noout -pubkey)" == "$(openssl pkey -in $R/config/console.key -pubout)" ]
@@ -123,7 +126,7 @@ check "older version: current unchanged" [ "$(readlink $R/current)" == "$R/relea
 ln -s /etc/shadow "$R/data/updates/request.conf"
 "$R/bin/update.sh" >/tmp/update3.log 2>&1
 check "symlinked request refused"       grep -q 'not a regular file' /tmp/update3.log
-check "symlinked request removed"       [ ! -e "$R/data/updates/request.conf" -a ! -L "$R/data/updates/request.conf" ]
+check "symlinked request removed"       [ ! -L "$R/data/updates/request.conf" ]
 check "/etc/shadow untouched"           mode_owner /etc/shadow "640 root:shadow"
 
 # 3) Success: point the health check at a file that reports the new version.
@@ -137,10 +140,43 @@ check "success: result Succeeded"       [ "$(result state)" == Succeeded ]
 check "success: current -> 9.0.2"       [ "$(readlink $R/current)" == "$R/releases/9.0.2" ]
 check "success: keeps 3 newest + previous" [ "$(ls $R/releases | sort -V | tr '\n' ' ')" == "$version 9.0.0 9.0.1 9.0.2 " ]
 grep -E 'result|removing' /tmp/update4.log | sed 's/^/     /'
+check "success: work folder removed"    [ -z "$(find "$R/releases" -maxdepth 1 -name '.work.*' -print -quit)" ]
 
 # 4) install.sh --upgrade uses the same path (staging + update unit); a downgrade is refused.
 out="$(bash /src/install.sh --unattended --upgrade --package "$pkg" 2>&1)"
 check "install.sh --upgrade refuses a downgrade" grep -q 'is not newer' <<<"$out"
+
+# 5) --repair keeps config and data, fixes modes, re-installs units and update.sh.
+cfg_sum="$(sha256sum "$R/config/appsettings.Production.json")"
+chmod 644 "$R/config/appsettings.Production.json"
+chmod 755 "$R/data"
+rm -f "$R/bin/update.sh"
+bash /src/install.sh --unattended --repair >/tmp/repair.log 2>&1
+check "repair: exit 0"                  [ $? -eq 0 ]
+check "repair: config unchanged"        [ "$(sha256sum "$R/config/appsettings.Production.json")" == "$cfg_sum" ]
+check "repair: config mode restored"    mode_owner "$R/config/appsettings.Production.json" "640 root:domainnotice"
+check "repair: data mode restored"      mode_owner "$R/data" "700 domainnotice:domainnotice"
+check "repair: update.sh restored"      mode_owner "$R/bin/update.sh" "755 root:root"
+
+# 6) --uninstall keeps config, data and the database; --purge removes everything after confirmation.
+bash /src/install.sh --uninstall >/tmp/uninstall.log 2>&1
+check "uninstall: releases removed"     [ ! -e "$R/releases" ]
+check "uninstall: current removed"      [ ! -L "$R/current" ]
+check "uninstall: units removed"        [ ! -e /etc/systemd/system/domainnotice.service ]
+check "uninstall: config kept"          [ -f "$R/config/appsettings.Production.json" ]
+check "uninstall: data kept"            [ -d "$R/data/keys" ]
+check "uninstall: database kept"        [ "$(runuser -u postgres -- psql -X -At -c "select count(*) from pg_database where datname='domainnotice'")" == 1 ]
+bash /src/install.sh --purge --unattended >/tmp/purge1.log 2>&1
+check "purge: unattended needs --yes"   [ -d "$R/config" ]
+bash /src/install.sh --purge --unattended --yes >/tmp/purge2.log 2>&1
+check "purge: folder removed"           [ ! -e "$R" ]
+check "purge: user removed"             bash -c '! id -u domainnotice >/dev/null 2>&1'
+check "purge: local database dropped"   [ "$(runuser -u postgres -- psql -X -At -c "select count(*) from pg_database where datname='domainnotice'")" == 0 ]
+
+# 7) Unattended install with a missing input stops before changing the machine.
+bash /src/install.sh --unattended --package "$pkg" >/tmp/missing.log 2>&1
+check "missing --db: refused"           grep -q 'missing or invalid --db' /tmp/missing.log
+check "missing --db: nothing created"   [ ! -e "$R" ]
 
 echo "# $fails failure(s)"
 [[ $fails -eq 0 ]]

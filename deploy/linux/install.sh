@@ -274,12 +274,9 @@ install_packages() {
     for p in libssl3t64 libssl3; do if apt_has_candidate "$p"; then ssl="$p"; break; fi; done
     [[ -n "$ssl" ]] || die "no OpenSSL 3 library package found"
     pkgs+=("$ssl")
-    # OpenLDAP client library for System.DirectoryServices.Protocols.
-    # TODO(build step 7): confirm the exact package; libldap2 on Ubuntu 24.04+, libldap-2.5-0 on older series.
-    local ldap=""
-    for p in libldap2 libldap-2.5-0; do if apt_has_candidate "$p"; then ldap="$p"; break; fi; done
-    [[ -n "$ldap" ]] || die "no OpenLDAP client library package (libldap2 / libldap-2.5-0) found"
-    pkgs+=("$ldap")
+    # OpenLDAP client library: System.DirectoryServices.Protocols loads libldap.so.2, from libldap2
+    # (confirmed on Ubuntu 24.04).
+    pkgs+=(libldap2)
     apt-get install -y -q --no-install-recommends "${pkgs[@]}"
 }
 
@@ -610,7 +607,7 @@ setup_certificate() {
 
 # ------------------------------------------------------------------------------------------------ steps 8-12
 
-create_admin_account() {
+collect_admin_account() { # asked before anything is changed on the machine
     ask ADMIN_USER "First local account (user name)" admin
     [[ -n "$ADMIN_USER" && "$ADMIN_USER" != -* && "$ADMIN_USER" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] ||
         die "invalid user name '$ADMIN_USER' (letters, digits, . _ @ -)"
@@ -624,6 +621,9 @@ create_admin_account() {
     fi
     [[ ${#ADMIN_PASSWORD} -ge 8 ]] || die "ADMIN_PASSWORD must have at least 8 characters"
     [[ "$ADMIN_PASSWORD" != *$'\n'* ]] || die "ADMIN_PASSWORD must be one line"
+}
+
+create_admin_account() {
     info "Creating the local account $ADMIN_USER"
     # The password goes through stdin, never the command line.
     printf '%s\n' "$ADMIN_PASSWORD" | run_server "$INSTALL_ROOT/current" --create-local-account "$ADMIN_USER" ||
@@ -697,21 +697,34 @@ do_install() {
     ask CONSOLE_PORT "Console HTTPS port" 443
     [[ "$CONSOLE_PORT" =~ ^[0-9]{1,5}$ ]] && ((CONSOLE_PORT >= 1 && CONSOLE_PORT <= 65535)) || die "invalid port '$CONSOLE_PORT'"
     ((CONSOLE_PORT != AGENT_PORT)) || die "the Console port must differ from the agent port $AGENT_PORT"
+    # Everything that can be missing in unattended mode is checked before the machine is changed.
+    if [[ $UNATTENDED -eq 1 ]]; then
+        [[ -n "$PACKAGE" || -n "$GITHUB_REPOSITORY" ]] || die "missing --package FILE (GitHub releases are not configured yet)"
+        [[ "$DB_MODE" == local || "$DB_MODE" == existing ]] || die "missing or invalid --db=local|existing"
+        if [[ "$DB_MODE" == existing ]]; then
+            [[ -n "$DB_HOST" ]] || die "missing --db-host"
+            [[ -n "$DB_PASSWORD" ]] || die "missing DB_PASSWORD (secrets file, stdin or DOMAINNOTICE_DB_PASSWORD)"
+        fi
+        [[ -z "$CERT_FILE" || -n "$CERT_KEY_FILE" ]] || die "--cert needs --cert-key"
+    fi
+    collect_admin_account
 
     install_packages
     obtain_package
+    # Database before the layout: a failed connection test leaves nothing in /opt/domainnotice.
+    setup_database
     create_user
     create_layout
     unpack_release
     dn_switch_current "$INSTALL_ROOT/releases/$PKG_VERSION"
-    setup_database
     write_config
     write_update_env
-    write_state
     setup_certificate
     install_deploy_files "$INSTALL_ROOT/current"
     migrate "$INSTALL_ROOT/current"
     create_admin_account
+    # install.state marks a finished install; without it a re-run starts over instead of offering repair.
+    write_state
     start_services
     configure_firewall
     print_summary
@@ -825,7 +838,16 @@ main() {
     check_system
     load_secrets
     local installed=0
-    if [[ -L "$INSTALL_ROOT/current" || -f "$CONFIG_FILE" ]]; then installed=1; fi
+    if [[ -f "$STATE_FILE" ]]; then
+        installed=1
+    elif [[ -L "$INSTALL_ROOT/current" || -f "$CONFIG_FILE" ]]; then
+        # A previous install stopped half way (install.state is written last). Start over; the config it wrote
+        # is replaced (it may hold a database password that is no longer valid). data/ is kept.
+        [[ -z "$MODE" ]] || die "a previous installation did not finish; run without --$MODE to install again, or --purge"
+        warn "a previous installation did not finish; installing again (its config is replaced, data/ is kept)"
+        if [[ $UNATTENDED -eq 0 ]]; then ask_yes_no "Continue?" y || exit 0; fi
+        rm -f -- "$CONFIG_FILE" "$UPDATE_ENV" "$INSTALL_ROOT/current"
+    fi
     if [[ $installed -eq 1 ]]; then
         if [[ -z "$MODE" ]]; then
             [[ $UNATTENDED -eq 0 ]] || die "DomainNotice is already installed: use --repair or --upgrade"

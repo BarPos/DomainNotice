@@ -293,7 +293,9 @@ dn_pg() { local tool="$1"; shift; if [[ -n "${PG_BIN-}" && -x "$PG_BIN/$tool" ]]
 
 dn_backup_db() {
     # The backups folder may be writable by the service user: write with O_EXCL so a planted link is refused.
-    local name="domainnotice-${CURRENT_VERSION}-to-${REQ_VERSION}-$(date -u +%Y%m%dT%H%M%SZ).dump"
+    local stamp name
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    name="domainnotice-${CURRENT_VERSION}-to-${REQ_VERSION}-$stamp.dump"
     BACKUP_FILE="$DN_ROOT/backups/$name"
     [[ -d "$DN_ROOT/backups" && ! -L "$DN_ROOT/backups" ]] || return 1
     ( set -o noclobber; umask 077; dn_pg pg_dump --format=custom --no-password >"$BACKUP_FILE" )
@@ -337,7 +339,7 @@ dn_rollback() {
     if [[ -n "${PREVIOUS_TARGET-}" ]]; then dn_switch_current "$PREVIOUS_TARGET"; fi
     # Write the result before the old version starts, so it finds the result on start.
     dn_write_result "$state" "$why; rolled back to $CURRENT_VERSION. $note"
-    systemctl start "$DN_SERVICE" || true
+    systemctl start --no-block "$DN_SERVICE" || true
     if ! dn_wait_healthy "$CURRENT_VERSION" 60; then dn_log "the old version $CURRENT_VERSION is not healthy either"; fi
     PHASE=done
 }
@@ -351,7 +353,7 @@ dn_fail() {
         dn_rollback "$why"
     elif [[ "$PHASE" != done ]]; then
         dn_write_result Failed "$why"
-        if [[ "$PHASE" == prepared ]]; then systemctl start "$DN_SERVICE" 2>/dev/null || true; fi
+        if [[ "$PHASE" == prepared ]]; then systemctl start --no-block "$DN_SERVICE" 2>/dev/null || true; fi
         PHASE=done
     fi
     exit 1
@@ -370,7 +372,10 @@ dn_main() {
     flock -n 9 || { dn_log "another update is running"; exit 0; }
     if [[ ! -e "$request" && ! -L "$request" ]]; then dn_log "no update request"; exit 0; fi
 
-    WORK="$(mktemp -d /run/domainnotice-update.XXXXXX)"
+    # Work folder on disk in the root-owned releases folder (/run is a small tmpfs; the package is ~50 MB).
+    [[ -d "$DN_ROOT/releases" && ! -L "$DN_ROOT/releases" ]] || { dn_log "$DN_ROOT/releases is missing"; exit 1; }
+    rm -rf -- "$DN_ROOT"/releases/.work.*
+    WORK="$(mktemp -d "$DN_ROOT/releases/.work.XXXXXX")"
     trap 'rm -rf -- "$WORK"' EXIT
     trap 'dn_on_error $LINENO' ERR
 
@@ -437,7 +442,8 @@ dn_main() {
     dn_run_as_service_user "$release" --migrate-only || dn_fail "migrations of $REQ_VERSION failed"
     dn_switch_current "$release"
     PHASE=switched
-    systemctl start "$DN_SERVICE" || dn_fail "$DN_SERVICE did not start"
+    # --no-block: with Type=notify a blocking start waits up to TimeoutStartSec; the 2-minute health check decides.
+    systemctl start --no-block "$DN_SERVICE" || dn_fail "$DN_SERVICE did not start"
     dn_wait_healthy "$REQ_VERSION" "$HEALTH_TIMEOUT_SECONDS" || dn_fail "$REQ_VERSION was not healthy within $HEALTH_TIMEOUT_SECONDS seconds"
     PHASE=done
     trap - ERR

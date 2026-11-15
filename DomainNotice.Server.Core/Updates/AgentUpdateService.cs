@@ -27,12 +27,15 @@ internal static class AgentUpdateTaskStates
     public static UpdateAgent BuildCommand(AgentUpdateTask task, AgentPackageInfo package) =>
         new() { TaskId = task.Id, Version = package.Version, Size = package.Size, Sha256 = package.Sha256 };
 
-    /// <summary>After UpdateAgent went out: Pending → Sent, retarget to the package version, restart the timeout.</summary>
+    /// <summary>
+    /// After UpdateAgent went out: Pending → Sent, retarget to the package version. The timeout runs from the first
+    /// send, so an agent that reconnects in a loop still times out.
+    /// </summary>
     public static void MarkSent(AgentUpdateTask task, AgentPackageInfo package, DateTime now)
     {
         if (task.State == AgentUpdateState.Pending) task.State = AgentUpdateState.Sent;
         task.ToVersion = package.Version;
-        task.SentAtUtc = now;
+        task.SentAtUtc ??= now;
         task.UpdatedAtUtc = now;
     }
 }
