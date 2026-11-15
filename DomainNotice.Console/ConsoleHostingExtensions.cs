@@ -1,5 +1,4 @@
 using DomainNotice.Console.Auth;
-using DomainNotice.Console.DevFakes;
 using DomainNotice.Console.Endpoints;
 using DomainNotice.Console.Services;
 using DomainNotice.Server.Abstractions;
@@ -74,19 +73,12 @@ public static class ConsoleHostingExtensions
         services.AddScoped<BrowserClock>();
         services.AddScoped<AnnouncementHandoff>();
 
-        // Development only, and only behind a flag: stand-ins for area services that are not registered (TryAdd, so
-        // any real registration wins). Never in Production: a fake sign-in service there would be an auth bypass.
-        if (FindEnvironment(services) is { } env && env.IsDevelopment() && config.GetValue<bool>("Console:DevFakes"))
-            services.AddConsoleDevFakes();
         return services;
     }
 
     /// <summary>Adds the middleware (static files, auth, antiforgery) and maps the Console's endpoints and components.</summary>
     public static WebApplication UseDomainNoticeConsole(this WebApplication app)
     {
-        if (app.Environment.IsDevelopment() && app.Configuration.GetValue<bool>("Console:DevCreateSchema"))
-            DevSchema.EnsureTables(app.Services); // TEMPORARY until the integrator adds the initial migration.
-
         if (!app.Environment.IsDevelopment())
         {
             app.UseExceptionHandler("/error", createScopeForErrors: true);
@@ -117,7 +109,4 @@ public static class ConsoleHostingExtensions
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
     }
-
-    private static IHostEnvironment? FindEnvironment(IServiceCollection services) =>
-        services.LastOrDefault(d => d.ServiceType == typeof(IHostEnvironment))?.ImplementationInstance as IHostEnvironment;
 }

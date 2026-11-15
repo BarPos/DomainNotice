@@ -15,8 +15,8 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace DomainNotice.Server.Tests.Console;
 
 /// <summary>
-/// Runs the real host (Program) in Development with the Console's dev fakes standing in for areas that are not
-/// registered yet (real registrations win). Checks sign-in, the auth gate and that every page prerenders.
+/// Runs the real host (Program) in Development with every real area registered; the schema comes from the
+/// initial migration (Program runs MigrateAsync). Checks sign-in, the auth gate and that every page prerenders.
 /// </summary>
 public partial class ConsoleSmokeTests(PostgresFixture pg)
 {
@@ -32,8 +32,8 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
             builder.UseEnvironment("Development");
             builder.UseSetting("ConnectionStrings:Default", connectionString);
             builder.UseSetting("Paths:Data", dataDir);
-            builder.UseSetting("Console:DevFakes", "true");
-            builder.UseSetting("Console:DevCreateSchema", "true");
+            builder.UseSetting("Agents:ListenAddress", "127.0.0.1");
+            builder.UseSetting("Agents:Port", "0");
             // Test-owned sign-in, so the P4 (Viewer) checks do not depend on which IAdminSignInService is registered.
             builder.ConfigureTestServices(s => s.Replace(ServiceDescriptor.Singleton<IAdminSignInService, TestSignInService>()));
         }
@@ -68,7 +68,7 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
     [Fact]
     public async Task Sign_in_gate_and_every_page_renders()
     {
-        var db = await pg.CreateDatabaseAsync();
+        var db = await pg.CreateDatabaseAsync(createSchema: false);
         var dataDir = Path.Combine(Path.GetTempPath(), "dn-console-" + Guid.NewGuid().ToString("N"));
         await using var factory = new Factory(db.ConnectionString, dataDir);
         var client = factory.CreateClient(new WebApplicationFactoryClientOptions
