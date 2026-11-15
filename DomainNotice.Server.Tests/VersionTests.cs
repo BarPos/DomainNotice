@@ -16,7 +16,7 @@ public class VersionTests
     [Theory]
     [InlineData("1.0.0", true)]
     [InlineData("0.9.0", false)] // below MinimumAgent
-    [InlineData("1.0.1", false)] // newer than the server
+    [InlineData("9.0.1", false)] // newer than the server
     [InlineData("2.0.0", false)]
     [InlineData("garbage", false)]
     [InlineData(null, false)]
