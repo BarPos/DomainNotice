@@ -31,6 +31,28 @@ public interface IDomainAuthenticator
     Task<DomainAuthResult> AuthenticateAsync(string userName, string password, CancellationToken ct);
 }
 
+/// <summary>Role rules of the domain sign-in, kept separate from LDAP so they can be tested.</summary>
+public static class DomainRoles
+{
+    /// <summary>
+    /// Admin when in any admin group; otherwise Viewer when in any viewer group (P4); otherwise null.
+    /// Empty group lists are skipped (no LDAP query).
+    /// </summary>
+    public static async Task<string?> ResolveAsync(Func<Task<List<string>>> adminGroupDns, Func<Task<List<string>>> viewerGroupDns,
+        Func<IReadOnlyCollection<string>, Task<bool>> isMemberOfAny)
+    {
+        var admin = await adminGroupDns();
+        if (admin.Count > 0 && await isMemberOfAny(admin)) return ConsoleRoles.Admin;
+        var viewer = await viewerGroupDns();
+        if (viewer.Count > 0 && await isMemberOfAny(viewer)) return ConsoleRoles.Viewer;
+        return null;
+    }
+
+    /// <summary>sAMAccountName match if unique; else a cn match if exactly one; else null (missing or ambiguous).</summary>
+    public static string? PickGroupDn(IReadOnlyList<string> bySamAccountName, IReadOnlyList<string> byCn) =>
+        bySamAccountName.Count == 1 ? bySamAccountName[0] : byCn.Count == 1 ? byCn[0] : null;
+}
+
 internal sealed class LdapDomainAuthenticator(
     LdapConnector connector,
     IOptions<DirectoryOptions> options,
@@ -83,12 +105,11 @@ internal sealed class LdapDomainAuthenticator(
                 var display = Attr(user, "displayName");
                 var name = ntName ?? sam;
 
-                var adminDns = await ResolveGroupsAsync(conn, O.AdminGroups, ct);
-                if (adminDns.Count > 0 && await IsMemberAsync(conn, user.DistinguishedName, adminDns, ct))
-                    return new(DomainAuthStatus.Success, name, display, ConsoleRoles.Admin);
-                var viewerDns = await ResolveGroupsAsync(conn, O.ViewerGroups, ct);
-                if (viewerDns.Count > 0 && await IsMemberAsync(conn, user.DistinguishedName, viewerDns, ct))
-                    return new(DomainAuthStatus.Success, name, display, ConsoleRoles.Viewer);
+                var role = await DomainRoles.ResolveAsync(
+                    () => ResolveGroupsAsync(conn, O.AdminGroups, ct),
+                    () => ResolveGroupsAsync(conn, O.ViewerGroups, ct),
+                    dns => IsMemberAsync(conn, user.DistinguishedName, dns, ct));
+                if (role is not null) return new(DomainAuthStatus.Success, name, display, role);
 
                 logger.LogInformation("Domain sign-in: {User} is not in an admin or viewer group.", name);
                 return new(DomainAuthStatus.NotAuthorized, name, display, Error: "Your account is not in a DomainNotice admin or viewer group.");
@@ -152,13 +173,9 @@ internal sealed class LdapDomainAuthenticator(
                 continue;
             }
             var bySam = await SearchDnsAsync(conn, $"(&(objectClass=group)(sAMAccountName={LdapFilters.Escape(name)}))", ct);
-            if (bySam.Count == 1)
-            {
-                dns.Add(bySam[0]);
-                continue;
-            }
-            var byCn = await SearchDnsAsync(conn, $"(&(objectClass=group)(cn={LdapFilters.Escape(name)}))", ct);
-            if (byCn.Count == 1) dns.Add(byCn[0]);
+            var byCn = bySam.Count == 1 ? [] : await SearchDnsAsync(conn, $"(&(objectClass=group)(cn={LdapFilters.Escape(name)}))", ct);
+            var dn = DomainRoles.PickGroupDn(bySam, byCn);
+            if (dn is not null) dns.Add(dn);
             else if (byCn.Count == 0) logger.LogWarning("Directory group {Group} was not found.", name);
             else logger.LogWarning("Directory group name {Group} is ambiguous ({Count} groups); use its DN.", name, byCn.Count);
         }
