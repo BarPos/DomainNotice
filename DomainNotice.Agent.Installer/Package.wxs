@@ -1,0 +1,148 @@
+<!--
+  DomainNotice Agent MSI (plan 4, 5.1, 11.3, 11.4). Per machine, x64.
+
+  First install (the Console shows this line):
+    msiexec /i DomainNotice.Agent-<version>-x64.msi /qn SERVERHOST=server.example.com SERVERPORT=5150
+            SERVERFINGERPRINT=<64 hex chars> INSTALLPASSWORD=<password>
+  Upgrades (including the agent's own update via msiexec /i <msi> /qn) reuse the stored values.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="DomainNotice Agent"
+           Manufacturer="DomainNotice"
+           Version="$(var.PackageVersion)"
+           UpgradeCode="3FA8EBB2-A428-4EE8-8124-4D62674BFEA7"
+           Scope="perMachine"
+           Language="1033"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="DomainNotice Agent $(var.PackageVersion)" />
+
+    <!-- Same-version reinstall allowed (rebuilds); downgrades refused. The old product is removed first, so the
+         service and the Session UI files are not in use when the new files are written. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of DomainNotice Agent is already installed."
+                  AllowSameVersionUpgrades="yes"
+                  Schedule="afterInstallInitialize" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- ===== Public properties ===================================================================== -->
+    <Property Id="SERVERHOST" Secure="yes" />
+    <Property Id="SERVERPORT" Secure="yes" />
+    <Property Id="SERVERFINGERPRINT" Secure="yes" />
+    <!-- Hidden: not written to MSI logs as a property value. Optional (servers with Enrolment:RequirePassword=false). -->
+    <Property Id="INSTALLPASSWORD" Secure="yes" Hidden="yes" />
+
+    <!-- Values stored by an earlier install. They are read into separate properties so that a value given on
+         the command line still wins; the SetProperty actions below copy them only when nothing was given. -->
+    <Property Id="STORED_SERVERHOST" Secure="yes">
+      <RegistrySearch Id="StoredServerHost" Root="HKLM" Key="Software\DomainNotice\Agent" Name="ServerHost" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="STORED_SERVERPORT" Secure="yes">
+      <RegistrySearch Id="StoredServerPort" Root="HKLM" Key="Software\DomainNotice\Agent" Name="ServerPort" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="STORED_SERVERFINGERPRINT" Secure="yes">
+      <RegistrySearch Id="StoredServerFingerprint" Root="HKLM" Key="Software\DomainNotice\Agent" Name="ServerFingerprint" Type="raw" Bitness="always64" />
+    </Property>
+
+    <SetProperty Id="SERVERHOST" Action="ReuseServerHost" Value="[STORED_SERVERHOST]"
+                 After="AppSearch" Sequence="both" Condition="NOT SERVERHOST AND STORED_SERVERHOST" />
+    <SetProperty Id="SERVERFINGERPRINT" Action="ReuseServerFingerprint" Value="[STORED_SERVERFINGERPRINT]"
+                 After="AppSearch" Sequence="both" Condition="NOT SERVERFINGERPRINT AND STORED_SERVERFINGERPRINT" />
+    <SetProperty Id="SERVERPORT" Action="ReuseServerPort" Value="[STORED_SERVERPORT]"
+                 After="AppSearch" Sequence="both" Condition="NOT SERVERPORT AND STORED_SERVERPORT" />
+    <SetProperty Id="SERVERPORT" Action="DefaultServerPort" Value="5150"
+                 After="ReuseServerPort" Sequence="both" Condition="NOT SERVERPORT" />
+
+    <!-- First install needs the server and its key fingerprint (the agent must know the real server before it
+         sends the install password anywhere). Upgrades have them from the registry search above. -->
+    <Launch Condition="Installed OR (SERVERHOST AND SERVERFINGERPRINT)"
+            Message="Set SERVERHOST and SERVERFINGERPRINT (the agent-link key fingerprint shown in the DomainNotice Console), for example: msiexec /i DomainNotice.Agent.msi /qn SERVERHOST=server.example.com SERVERFINGERPRINT=0123...cdef INSTALLPASSWORD=secret" />
+
+    <!-- ===== Folders ================================================================================ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="DomainNotice Agent" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATAFOLDER" Name="DomainNotice" />
+    </StandardDirectory>
+
+    <!-- ===== Files and the service ================================================================== -->
+    <ComponentGroup Id="AgentFiles" Directory="INSTALLFOLDER">
+      <!-- Agent (root) + Session UI (Session\ subfolder), both self-contained win-x64, published by build-agent-msi.ps1. -->
+      <Files Include="$(var.AgentPublishDir)\**">
+        <Exclude Files="$(var.AgentPublishDir)\DomainNotice.Agent.exe" />
+        <Exclude Files="$(var.AgentPublishDir)\**\*.pdb" />
+      </Files>
+
+      <Component Id="AgentServiceComponent">
+        <File Id="AgentExe" Source="$(var.AgentPublishDir)\DomainNotice.Agent.exe" KeyPath="yes" />
+        <ServiceInstall Id="AgentService"
+                        Name="DomainNotice.Agent"
+                        DisplayName="DomainNotice Agent"
+                        Description="Keeps the connection to the DomainNotice server and shows its announcements to the users of this computer."
+                        Type="ownProcess"
+                        Start="auto"
+                        Account="LocalSystem"
+                        ErrorControl="normal"
+                        Vital="yes">
+          <!-- Recovery: restart after 1 minute on the first, second and later failures (plan 5.1). -->
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="60"
+                              ResetPeriodInDays="1" />
+          <!-- Apply the recovery actions also when the service stops with an error exit code (not only on a crash). -->
+          <ServiceConfig OnInstall="yes" OnReinstall="yes" DelayedAutoStart="no" FailureActionsWhen="failedToStopOrReturnedError" />
+        </ServiceInstall>
+        <ServiceControl Id="AgentServiceControl" Name="DomainNotice.Agent" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ===== Configuration ========================================================================== -->
+    <!-- HKLM\Software\DomainNotice\Agent: readable by Administrators (needed by the upgrade search), not secret.
+         The service adds ComputerId and ClientCertificate (public certificate) here; those are not MSI-owned,
+         so they survive upgrades. -->
+    <Component Id="AgentConfig" Directory="INSTALLFOLDER">
+      <RegistryKey Root="HKLM" Key="Software\DomainNotice\Agent">
+        <RegistryValue Name="ServerHost" Type="string" Value="[SERVERHOST]" KeyPath="yes" />
+        <RegistryValue Name="ServerPort" Type="string" Value="[SERVERPORT]" />
+        <RegistryValue Name="ServerFingerprint" Type="string" Value="[SERVERFINGERPRINT]" />
+      </RegistryKey>
+    </Component>
+
+    <!-- Install password, only when given. Registry ACLs are per key, so it lives in its own subkey with a
+         protected DACL that allows SYSTEM only (inheritance broken). The service re-stores it DPAPI-encrypted on
+         its first start, deletes this plain value, and deletes the encrypted copy after enrolment (plan 4). -->
+    <Component Id="AgentInstallPassword" Directory="INSTALLFOLDER" Condition="INSTALLPASSWORD">
+      <RegistryKey Root="HKLM" Key="Software\DomainNotice\Agent\Secret" ForceCreateOnInstall="yes">
+        <PermissionEx Sddl="D:PAI(A;CI;KA;;;SY)" />
+        <RegistryValue Name="Provided" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Name="InstallPassword" Type="string" Value="[INSTALLPASSWORD]" />
+      </RegistryKey>
+    </Component>
+
+    <!-- %ProgramData%\DomainNotice (logs, updates): SYSTEM + Administrators only, inheritance broken (plan 3.2).
+         OpenNotifier gave Users full control here; that does not carry over. -->
+    <Component Id="DataFolderComponent" Directory="DATAFOLDER">
+      <CreateFolder>
+        <PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />
+      </CreateFolder>
+      <RegistryValue Root="HKLM" Key="Software\DomainNotice\Agent" Name="DataFolder" Type="string" Value="[DATAFOLDER]" KeyPath="yes" />
+    </Component>
+
+    <!-- No HKLM\...\Run entry: the service starts the Session UI in every user session itself (plan 5.2). -->
+
+    <Feature Id="Main" Title="DomainNotice Agent" Level="1">
+      <ComponentGroupRef Id="AgentFiles" />
+      <ComponentRef Id="AgentConfig" />
+      <ComponentRef Id="AgentInstallPassword" />
+      <ComponentRef Id="DataFolderComponent" />
+    </Feature>
+  </Package>
+</Wix>

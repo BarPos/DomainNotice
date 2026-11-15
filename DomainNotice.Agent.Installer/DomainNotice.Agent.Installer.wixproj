@@ -1,0 +1,22 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!--
+    WiX 5 MSI for the Windows agent. Builds on Windows only, so it is NOT part of DomainNotice.sln.
+    Normally built by build/build-agent-msi.ps1, which publishes Agent + Session UI into AgentPublishDir first
+    and passes PackageVersion from Directory.Build.props.
+  -->
+  <PropertyGroup>
+    <OutputName>DomainNotice.Agent</OutputName>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">1.0.0</PackageVersion>
+    <AgentPublishDir Condition="'$(AgentPublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\agent-publish</AgentPublishDir>
+    <DefineConstants>PackageVersion=$(PackageVersion);AgentPublishDir=$(AgentPublishDir)</DefineConstants>
+    <!-- ICE61: same-version upgrades are allowed on purpose (rebuilds of one version). -->
+    <SuppressIces>ICE61</SuppressIces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Version is central (Directory.Packages.props). -->
+    <PackageReference Include="WixToolset.Util.wixext" />
+  </ItemGroup>
+</Project>
