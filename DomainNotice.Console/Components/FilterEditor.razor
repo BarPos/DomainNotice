@@ -1,0 +1,128 @@
+@using System.Globalization
+@inject BrowserClock Clock
+@* Builds one filter clause (a chip) for the shared grid: field, operator and a value input that fits the field kind. *@
+
+<MudPaper Outlined="true" Class="dn-grid-editor">
+    <MudSelect T="string" Label="Field" Value="_fieldKey" ValueChanged="FieldChanged" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense">
+        @foreach (var f in Fields.Where(f => f.Filterable))
+        {
+            <MudSelectItem Value="@f.Key">@f.Label</MudSelectItem>
+        }
+    </MudSelect>
+
+    @if (Field is { } field)
+    {
+        @if (field.Ops.Count > 1)
+        {
+            <MudSelect T="FilterOp" Label="Condition" @bind-Value="_op" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense">
+                @foreach (var op in field.Ops)
+                {
+                    <MudSelectItem Value="@op">@OpLabel(op)</MudSelectItem>
+                }
+            </MudSelect>
+        }
+
+        @switch (field.Kind)
+        {
+            case FieldKind.Text:
+                <MudTextField T="string" Label="Value" @bind-Value="_text" Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true"
+                              OnKeyUp="@(e => e.Key == "Enter" ? ApplyAsync() : Task.CompletedTask)" AutoFocus="true" />
+                break;
+            case FieldKind.Choice:
+                <MudSelect T="string" Label="Is any of" MultiSelection="true" @bind-SelectedValues="_choices" Dense="true"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" ToStringFunc="@(v => field.Options.FirstOrDefault(o => o.Value == v)?.Label ?? v)">
+                    @foreach (var o in field.Options)
+                    {
+                        <MudSelectItem Value="@o.Value">@o.Label</MudSelectItem>
+                    }
+                </MudSelect>
+                break;
+            case FieldKind.Bool:
+                <MudSelect T="string" Label="Value" @bind-Value="_text" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    @foreach (var o in field.Options)
+                    {
+                        <MudSelectItem Value="@o.Value">@o.Label</MudSelectItem>
+                    }
+                </MudSelect>
+                break;
+            case FieldKind.Date when _op is FilterOp.OlderThanDays or FilterOp.WithinDays:
+                <MudNumericField T="int" Label="Days" @bind-Value="_days" Min="0" Max="36500" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                break;
+            case FieldKind.Date:
+                <MudDatePicker Label="@($"From ({Clock.ZoneLabel})")" @bind-Date="_from" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" DateFormat="yyyy-MM-dd" />
+                <MudDatePicker Label="@($"To ({Clock.ZoneLabel})")" @bind-Date="_to" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" DateFormat="yyyy-MM-dd" />
+                break;
+            case FieldKind.Number:
+                <MudNumericField T="double?" Label="Value" @bind-Value="_number" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                break;
+        }
+    }
+
+    <div class="d-flex gap-2">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ApplyAsync" Disabled="@(Field is null)">Add filter</MudButton>
+        <MudButton Variant="Variant.Text" OnClick="OnCancel">Cancel</MudButton>
+    </div>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<GridFieldInfo> Fields { get; set; } = [];
+    [Parameter] public string? InitialField { get; set; }
+    [Parameter] public EventCallback<FilterClause> OnApply { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private string? _fieldKey;
+    private FilterOp _op;
+    private string? _text;
+    private int _days = 7;
+    private DateTime? _from;
+    private DateTime? _to;
+    private double? _number;
+    private IReadOnlyCollection<string> _choices = [];
+
+    private GridFieldInfo? Field => Fields.FirstOrDefault(f => f.Key == _fieldKey);
+
+    protected override void OnInitialized() =>
+        FieldChanged(InitialField ?? Fields.FirstOrDefault(f => f.Filterable)?.Key);
+
+    private void FieldChanged(string? key)
+    {
+        _fieldKey = key;
+        var field = Field;
+        _op = field?.Ops.FirstOrDefault() ?? FilterOp.Contains;
+        _text = field?.Kind == FieldKind.Bool ? field.Options.FirstOrDefault()?.Value : null;
+        _choices = [];
+    }
+
+    public static string OpLabel(FilterOp op) => op switch
+    {
+        FilterOp.Contains => "contains",
+        FilterOp.Equals => "is",
+        FilterOp.Between => "between",
+        FilterOp.OlderThanDays => "older than (days)",
+        FilterOp.WithinDays => "within the last (days)",
+        FilterOp.AtLeast => "at least",
+        FilterOp.AtMost => "at most",
+        _ => op.ToString(),
+    };
+
+    private async Task ApplyAsync()
+    {
+        if (Field is not { } field) return;
+        string? value = field.Kind switch
+        {
+            FieldKind.Text => string.IsNullOrWhiteSpace(_text) ? null : _text.Trim(),
+            FieldKind.Bool => _text,
+            FieldKind.Choice => _choices.Any() ? string.Join('|', _choices) : null,
+            FieldKind.Number => _number?.ToString(CultureInfo.InvariantCulture),
+            FieldKind.Date when _op is FilterOp.OlderThanDays or FilterOp.WithinDays => _days.ToString(CultureInfo.InvariantCulture),
+            FieldKind.Date => _from is null && _to is null
+                ? null
+                : FilterClause.FormatRange(
+                    _from is { } f ? Clock.ToUtc(f.Date) : null,
+                    _to is { } t ? Clock.ToUtc(t.Date.AddDays(1).AddSeconds(-1)) : null),
+            _ => null,
+        };
+        if (value is null) return;
+        await OnApply.InvokeAsync(new FilterClause(field.Key, _op, value));
+    }
+}

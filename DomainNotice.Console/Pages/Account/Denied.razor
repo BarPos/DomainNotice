@@ -1,0 +1,14 @@
+@page "/account/denied"
+@layout AccountLayout
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+
+<PageTitle>Access denied · DomainNotice</PageTitle>
+
+<h1>Access denied</h1>
+<p class="dn-sub">Your account is signed in but has no role for this console, or this action needs the Admin role.</p>
+<form method="post" action="/account/logout">
+    <AntiforgeryToken />
+    <button type="submit">Sign out</button>
+</form>
+<div class="dn-account-foot"><a href="/">Back to the console</a></div>

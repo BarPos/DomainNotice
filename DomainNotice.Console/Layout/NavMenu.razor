@@ -1,0 +1,23 @@
+<MudNavMenu Class="pt-2">
+    <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.SpaceDashboard">Dashboard</MudNavLink>
+    <MudNavLink Href="/computers" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Computer">Computers</MudNavLink>
+    <MudNavLink Href="/announcements" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Campaign">Announcements</MudNavLink>
+    <MudNavLink Href="/confirmations" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.TaskAlt">Confirmations</MudNavLink>
+    <MudNavLink Href="/answers" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.QuestionAnswer">Answers</MudNavLink>
+    <MudNavLink Href="/history" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.History">History</MudNavLink>
+    <MudNavLink Href="/agent-updates" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.SystemUpdateAlt">Agent updates</MudNavLink>
+    <MudNavLink Href="/directory" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.AccountTree">Directory</MudNavLink>
+    <MudNavLink Href="/settings" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Settings">
+        Settings
+        @if (UpdateAvailable)
+        {
+            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="dn-nav-badge" title="A newer release is available">Update</MudChip>
+        }
+    </MudNavLink>
+    <MudNavLink Href="/audit" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Policy">Audit log</MudNavLink>
+</MudNavMenu>
+
+@code {
+    /// <summary>A newer release is available (IServerUpdateService.GetStatusAsync).</summary>
+    [Parameter] public bool UpdateAvailable { get; set; }
+}
