@@ -1,0 +1,12 @@
+# Starts domainnotice-update.service when the server stages an update (plan 11.2 step 2).
+# The server writes request.conf atomically (temp file + rename). update.sh removes it before anything else,
+# because PathExists= fires again as long as the file exists.
+[Unit]
+Description=Watch for DomainNotice update requests
+
+[Path]
+PathExists=/opt/domainnotice/data/updates/request.conf
+Unit=domainnotice-update.service
+
+[Install]
+WantedBy=multi-user.target

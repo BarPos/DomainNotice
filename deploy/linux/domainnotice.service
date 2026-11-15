@@ -1,0 +1,54 @@
+# DomainNotice server (plan 11.5 step 10). Installed by install.sh to /etc/systemd/system/.
+[Unit]
+Description=DomainNotice server
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+# The server uses UseSystemd() and reports readiness itself.
+Type=notify
+User=domainnotice
+Group=domainnotice
+WorkingDirectory=/opt/domainnotice/current
+ExecStart=/opt/domainnotice/current/DomainNotice.Server
+Environment=DOMAINNOTICE_CONFIG=/opt/domainnotice/config/appsettings.Production.json
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_NOLOGO=1
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+# Migrations run at start; give them time.
+TimeoutStartSec=300
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5s
+
+# Listen on 443 without root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening. The program files (releases/, current) and config/ are read-only for the service. It writes only its
+# data folder (keys, Data Protection keys, package cache, staged updates) and the backups folder.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/domainnotice/data /opt/domainnotice/backups
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+UMask=0077
+# Not set on purpose: MemoryDenyWriteExecute (it breaks the .NET JIT).
+
+[Install]
+WantedBy=multi-user.target
