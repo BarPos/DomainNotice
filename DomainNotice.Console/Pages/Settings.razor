@@ -281,11 +281,15 @@
 
     private async Task LoadUpdatesAsync() => _update = await Updates.GetStatusAsync();
 
-    private void TabChanged(int index) =>
+    // MudTabs can raise this while panels register during prerendering; navigating then throws mid-stream.
+    private void TabChanged(int index)
+    {
+        if (!RendererInfo.IsInteractive || index == TabIndex) return;
         Nav.NavigateTo(Nav.GetUriWithQueryParameters(new Dictionary<string, object?>
         {
             ["tab"] = index == 0 ? null : Tabs[index], ["imported"] = null, ["importError"] = null,
         }), replace: true);
+    }
 
     private static string FormatSize(long bytes) => bytes >= 1024 * 1024 ? $"{bytes / (1024.0 * 1024):0.0} MB" : $"{bytes / 1024.0:0} KB";
 

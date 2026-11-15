@@ -152,8 +152,12 @@ else
         }).ToList();
     }
 
-    private void TabChanged(int index) =>
+    // MudTabs can raise this while panels register during prerendering; navigating then throws mid-stream.
+    private void TabChanged(int index)
+    {
+        if (!RendererInfo.IsInteractive || index == Tab) return;
         Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", index == 0 ? null : index), replace: true);
+    }
 
     private async Task DeleteAsync()
     {
