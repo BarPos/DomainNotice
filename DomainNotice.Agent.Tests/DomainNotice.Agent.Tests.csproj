@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <!--
+      Unit tests for the platform-neutral agent logic. Targets plain net10.0 so it runs on macOS/Linux:
+      it compiles DomainNotice.Agent/Logic/*.cs directly instead of referencing the net10.0-windows project.
+      Deliberately NOT in DomainNotice.sln (run: dotnet test --project DomainNotice.Agent.Tests).
+    -->
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <OutputType>Exe</OutputType>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <RootNamespace>DomainNotice.Agent.Tests</RootNamespace>
+        <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="xunit.v3" />
+    </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\DomainNotice.Shared\DomainNotice.Shared.csproj" />
+    </ItemGroup>
+    <ItemGroup>
+        <Compile Include="..\DomainNotice.Agent\Logic\*.cs" Link="Logic\%(Filename)%(Extension)" />
+    </ItemGroup>
+    <ItemGroup>
+        <Using Include="Xunit" />
+    </ItemGroup>
+</Project>
