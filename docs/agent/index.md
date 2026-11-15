@@ -21,6 +21,12 @@ The agent has two parts:
 There is **no Exit item**, and standard users cannot stop the service. If a user kills the Session UI, the service
 starts it again within seconds, and a pending announcement reappears.
 
+The Session UI follows the service:
+- **Stopping the service** (or an MSI upgrade) closes the tray app in every session. The service tells each app to
+  exit, then force-closes any that remain after a few seconds.
+- If the service process disappears without warning, the tray app exits by itself.
+- **Starting the service** launches the tray app again in every logged-on session.
+
 ## Installing
 
 Download `DomainNotice.Agent-<version>-x64.msi` from the [release](https://github.com/BarPos/DomainNotice/releases)

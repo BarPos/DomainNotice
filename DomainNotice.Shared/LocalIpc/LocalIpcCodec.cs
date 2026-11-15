@@ -24,6 +24,7 @@ public sealed record LocalEnvelope
 [JsonSerializable(typeof(ShownReport))]
 [JsonSerializable(typeof(ConfirmRequest))]
 [JsonSerializable(typeof(RequestPending))]
+[JsonSerializable(typeof(ServiceStopping))]
 public sealed partial class LocalIpcJsonContext : JsonSerializerContext;
 
 public static class LocalIpcCodec
@@ -39,6 +40,7 @@ public static class LocalIpcCodec
         [ShownReport.Type] = Ctx.ShownReport,
         [ConfirmRequest.Type] = Ctx.ConfirmRequest,
         [RequestPending.Type] = Ctx.RequestPending,
+        [ServiceStopping.Type] = Ctx.ServiceStopping,
     };
 
     public static JsonTypeInfo<T> TypeInfo<T>() where T : ILocalMessage => (JsonTypeInfo<T>)ByType[T.Type];

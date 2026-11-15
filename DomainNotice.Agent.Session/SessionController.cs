@@ -16,7 +16,7 @@ internal sealed class SessionController : IDisposable
     private TrayHost? _tray;
     private AnnouncementWindow? _current;
     private ConnectionStatus? _status;
-    private bool _pipeConnected;
+    private volatile bool _pipeConnected;
 
     public SessionController(Dispatcher ui) => _ui = ui;
 
@@ -49,6 +49,9 @@ internal sealed class SessionController : IDisposable
                 _status = status;
                 UpdateStatus();
                 break;
+            case ServiceStopping:
+                Exit("the DomainNotice Agent service is stopping");
+                return;
         }
         UpdatePending();
     }
@@ -100,9 +103,57 @@ internal sealed class SessionController : IDisposable
         else
         {
             _current?.OnServiceLost();
+            _ = ExitIfServiceGoneAsync();
         }
         UpdateStatus();
         UpdatePending();
+    }
+
+    /// <summary>
+    /// The pipe dropped. If the Agent service process is gone (stopped, crashed, being upgraded), exit: the service
+    /// starts the Session UI again in every session when it comes back. A quick service restart just reconnects.
+    /// </summary>
+    private async Task ExitIfServiceGoneAsync()
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+            if (_pipeConnected || _exiting) return;
+            if (!ServiceProcessRunning())
+            {
+                await _ui.InvokeAsync(() => Exit("the DomainNotice Agent service is not running"));
+                return;
+            }
+        }
+    }
+
+    private static bool ServiceProcessRunning()
+    {
+        try
+        {
+            var processes = System.Diagnostics.Process.GetProcessesByName(LocalPipe.ServiceProcessName);
+            foreach (var p in processes) p.Dispose();
+            return processes.Length > 0;
+        }
+        catch (Exception)
+        {
+            return true; // cannot tell: keep running and keep trying to reconnect
+        }
+    }
+
+    private volatile bool _exiting;
+
+    private void Exit(string reason)
+    {
+        if (_exiting) return;
+        _exiting = true;
+        SessionLog.Write($"Exiting: {reason}.");
+        AnnouncementWindow.SessionEnding = true; // lets the open window close
+        _current?.CloseNow();
+        _cts.Cancel();
+        _tray?.Dispose(); // removes the tray icon right away (no ghost icon)
+        _tray = null;
+        System.Windows.Application.Current?.Shutdown();
     }
 
     private void ShowPending()

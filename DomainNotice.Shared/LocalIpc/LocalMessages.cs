@@ -38,6 +38,9 @@ public static class LocalPipe
     /// so they cannot share one folder.
     /// </summary>
     public const string SessionSubfolder = "Session";
+
+    /// <summary>Process name of the Agent service (DomainNotice.Agent.exe). The Session UI exits when it is gone.</summary>
+    public const string ServiceProcessName = "DomainNotice.Agent";
 }
 
 /// <summary>Fixed status texts the Session UI recognises (icon colour).</summary>
@@ -99,6 +102,12 @@ public sealed record ConfirmRequest : ILocalMessage
     public Guid DeliveryId { get; init; }
     public Guid ButtonId { get; init; }
     public List<AnswerItem> Answers { get; init; } = [];
+}
+
+/// <summary>Service → Session UI: the service is stopping; close everything and exit (it starts the UI again).</summary>
+public sealed record ServiceStopping : ILocalMessage
+{
+    public static string Type => "ServiceStopping";
 }
 
 /// <summary>Asks the service to send the connection status and every pending announcement again.</summary>

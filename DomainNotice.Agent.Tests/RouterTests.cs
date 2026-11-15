@@ -209,6 +209,29 @@ public sealed class RouterTests
     }
 
     [Fact]
+    public async Task Service_stopping_is_sent_to_every_session()
+    {
+        var router = new AnnouncementRouter(TimeProvider.System);
+        var alice = new FakeEndpoint(1, @"CORP\alice");
+        var bob = new FakeEndpoint(2, @"CORP\bob");
+        await router.OnSessionConnectedAsync(alice, Ct);
+        await router.OnSessionConnectedAsync(bob, Ct);
+
+        await router.NotifyServiceStoppingAsync(Ct);
+
+        Assert.Single(alice.Of<ServiceStopping>());
+        Assert.Single(bob.Of<ServiceStopping>());
+    }
+
+    [Fact]
+    public void Service_stopping_round_trips_over_the_pipe_codec()
+    {
+        var frame = LocalIpcCodec.EncodeFrame(new ServiceStopping());
+        var body = frame.AsSpan(Framing.HeaderSize).ToArray();
+        Assert.IsType<ServiceStopping>(LocalIpcCodec.Decode(body));
+    }
+
+    [Fact]
     public async Task Confirm_while_offline_is_rejected_locally()
     {
         var router = new AnnouncementRouter(TimeProvider.System);

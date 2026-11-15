@@ -123,6 +123,19 @@ public sealed class SessionManager : BackgroundService, ISessionsSource
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        // First ask every Session UI to exit (it closes its windows and removes its tray icon cleanly), give them a
+        // moment, then kill whatever is left. The service starts them again in every session when it comes back.
+        try
+        {
+            using var notify = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            notify.CancelAfter(TimeSpan.FromSeconds(2));
+            await _router.NotifyServiceStoppingAsync(notify.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
+        {
+        }
+        WaitForSessionUisToExit(TimeSpan.FromSeconds(3));
+
         await base.StopAsync(cancellationToken).ConfigureAwait(false);
         foreach (var worker in _workers.Values) worker.Stop(killUi: true);
         _workers.Clear();
@@ -136,6 +149,25 @@ public sealed class SessionManager : BackgroundService, ISessionsSource
                 try
                 {
                     process.Kill();
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                }
+            }
+        }
+    }
+
+    private static void WaitForSessionUisToExit(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        foreach (var process in SessionUiLauncher.FindAll())
+        {
+            using (process)
+            {
+                try
+                {
+                    var left = deadline - DateTime.UtcNow;
+                    if (left > TimeSpan.Zero) process.WaitForExit(left);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
                 {

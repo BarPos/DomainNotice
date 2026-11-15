@@ -97,6 +97,14 @@ public sealed class AnnouncementRouter
         }
     }
 
+    /// <summary>Tells every connected Session UI that the service is stopping, so it exits by itself.</summary>
+    public async Task NotifyServiceStoppingAsync(CancellationToken ct)
+    {
+        List<ISessionEndpoint> endpoints;
+        lock (_gate) endpoints = [.. _endpoints];
+        await Task.WhenAll(endpoints.Select(e => SafeSendAsync(e, new ServiceStopping(), ct))).ConfigureAwait(false);
+    }
+
     /// <summary>Updates only the status line (e.g. "The server is older than this agent") without touching the link.</summary>
     public async Task SetStatusAsync(ConnectionStatus status, CancellationToken ct)
     {
