@@ -1,8 +1,6 @@
 # DomainNotice plan
 
-DomainNotice is a rewrite of OpenNotifier (described in **Appendix A** at the end of this file). It keeps the core idea: admins write announcements, and every domain PC shows them in a window that can't be dismissed until the person responds. It changes the parts listed below.
-
-This is a plan only. Nothing has been scaffolded yet.
+DomainNotice lets admins write announcements, and every domain PC shows them in a window that can't be dismissed until the person responds. This document is the design: the requests it answers, how each part works, and the decisions taken along the way.
 
 ## Requests and where they are answered
 
@@ -13,7 +11,7 @@ This is a plan only. Nothing has been scaffolded yet.
 | 3 | Encryption with key pairs on both sides; optional install password to add a computer | [3](#3-server--agent-link), [4](#4-enrolment-and-install-password) |
 | 4 | No Exit option in the agent | [5](#5-agent) |
 | 5 | Agent is a Windows service, starts on boot by default; tray icon allowed | [5](#5-agent) |
-| 6 | Console looks and works like the ESET management console | [9](#9-console) |
+| 6 | Console laid out as a management console: navigation bar, group tree, data grids, detail pages | [9](#9-console) |
 | 7 | Database migrations | [10](#10-database-and-migrations) |
 | 8 | Computer list with current IPs, name + name history, logged-in users + user history | [6](#6-computer-inventory-and-history) |
 | 9 | History kept for a configurable time, default 30 days | [6.3](#63-retention) |
@@ -24,9 +22,9 @@ This is a plan only. Nothing has been scaffolded yet.
 | 14 | Keep local accounts as a backup; the domain is reached only over LDAP | [7](#7-domain-integration-ldap-only), [7.1](#71-local-accounts-backup) |
 | 15 | AD link of a computer is confirmed automatically, without an admin | [3.4](#34-identity-rule) |
 | 16 | Server supports older agents, but not newer ones | [11.1](#111-version-rules) |
-| 17 | Server can send an update command to agents (like Wazuh); agents update to the server's version | [11.3](#113-agent-update-server-sends-an-update-command) |
-| 18 | Console button that updates Server and Console to the newest version (like Nginx UI) | [11.2](#112-server-and-console-update-button-in-the-console) |
-| 19 | Updates come from GitHub releases; repository left blank for now, so updates are off | [11.4](#114-github-releases) |
+| 17 | Server can send an update command to agents; agents update to the server's version | [11.3](#113-agent-update-server-sends-an-update-command) |
+| 18 | Console button that updates Server and Console to the newest version | [11.2](#112-server-and-console-update-button-in-the-console) |
+| 19 | Updates come from GitHub releases of `BarPos/DomainNotice`, built by a manually run release workflow | [11.4](#114-github-releases) |
 | 20 | The server downloads the agent MSI once and hands it to agents | [11.3](#113-agent-update-server-sends-an-update-command) |
 | 21 | Re-imaged computers without proof go to a list that needs admin approval | [3.4](#34-identity-rule), [4](#4-enrolment-and-install-password), [9.2](#92-pages) |
 | 22 | PostgreSQL is required | [10](#10-database-and-migrations) |
@@ -75,7 +73,7 @@ Windows PC ── Agent service (LocalSystem) ────┘
 ```
 
 - **Push over an open connection** (decided, D9). Each agent keeps one long-lived outbound connection to the server. The server sends an announcement as soon as one is due for a user on that computer: when it is saved, when its start time comes, or when a user logs on. The agent reconnects with backoff when the link drops.
-- **Only the Console uses HTTPS**, because it is a browser app. The no-HTTP rule covers the server–agent link only. Only the server downloads updates from GitHub, over HTTPS. Agents get their update package from the server over the agent link (section 11.3), so PCs never contact GitHub.
+- **Only the Console uses HTTP(S)**, because it is a browser app (HTTPS by default; plain HTTP with `--console-mode=http` when something in front of it handles HTTPS). The no-HTTP rule covers the server–agent link only. Only the server downloads updates from GitHub, over HTTPS. Agents get their update package from the server over the agent link (section 11.3), so PCs never contact GitHub.
 
 ---
 
@@ -96,7 +94,7 @@ Windows PC ── Agent service (LocalSystem) ────┘
   - the server pins each agent's fingerprint, which it records at enrolment.
 - Keys are generated locally and never leave the machine they were made on:
   - **Server:** generated on first start into `/opt/domainnotice/data/keys/`, owned by the `domainnotice` service user, mode 600. The Console shows the fingerprint for building the MSI.
-  - **Agent:** a non-exportable CNG key in the machine key store, readable only by SYSTEM and Administrators. The agent's data folder `%ProgramData%\DomainNotice` is also limited to SYSTEM and Administrators. OpenNotifier gave Users full control of that folder; that does not carry over.
+  - **Agent:** a non-exportable CNG key in the machine key store, readable only by SYSTEM and Administrators. The agent's data folder `%ProgramData%\DomainNotice` is also limited to SYSTEM and Administrators; users get no access to it.
 
 ### 3.3 Messages (first version)
 
@@ -171,11 +169,11 @@ Password handling on the agent:
 - On start: load the key, connect, send `Hello`, then follow user sessions with `OnSessionChange` (logon, logoff, lock, unlock, remote connect and disconnect).
 
 ### 5.2 Session UI (`DomainNotice.Agent.Session`)
-- The service starts one Session process in every interactive user session, using `WTSQueryUserToken` and `CreateProcessAsUser`. This replaces OpenNotifier's `HKLM\...\Run` autostart.
+- The service starts one Session process in every interactive user session, using `WTSQueryUserToken` and `CreateProcessAsUser`. No `HKLM\...\Run` autostart entry is used.
 - The Session process connects to the service over a local named pipe. The pipe ACL allows SYSTEM and that session's user only, and the service checks that the connecting process belongs to the expected session.
 - **Tray icon** with a status line (connected or disconnected, server name), "About", and "Show pending announcement" when one is waiting. **No Exit item.**
 - If a user kills the Session process (for example in Task Manager), the service starts it again within a few seconds, and a pending announcement is shown again.
-- The announcement window works as in OpenNotifier: always on top, no close button, Esc and Alt+F4 are ignored, buttons unlock by `DismissRules`, and Markdown is rendered.
+- The announcement window is always on top, no close button, Esc and Alt+F4 are ignored, buttons unlock by `DismissRules`, and Markdown is rendered.
 
 ### 5.3 Several users on one computer
 - Each session gets its own deliveries. The server targets and counts per user, so two users on one terminal server each see their own announcements.
@@ -217,7 +215,7 @@ IP history is not stored; see proposal P6.
 
 **Reading of "only use LDAP"** (confirmed in round 2, D3): the server talks to the domain **only over LDAP** (`System.DirectoryServices.Protocols`). It uses no other domain protocol and does not join the domain. The supported install is Ubuntu 24.04 LTS or newer (section 11.5). **Local accounts are kept as a backup** (section 7.1).
 
-What changes compared with OpenNotifier. Item 1 is the domain sign-in, next to the local accounts in 7.1. Items 2–9 are my reading of "improve" and can each be struck; items 5–8 together are proposal P5.
+What the integration does. Item 1 is the domain sign-in, next to the local accounts in 7.1. Items 2–9 are my reading of "improve" and can each be struck; items 5–8 together are proposal P5.
 
 1. **Sign-in.** Admins sign in with their domain account (bind as the user), and must be in one of `Directory:AdminGroups`. Nested groups count.
 2. **Safer connection.**
@@ -236,7 +234,7 @@ What changes compared with OpenNotifier. Item 1 is the domain sign-in, next to t
 9. **Async LDAP calls** with a short-lived connection pool, so a slow DC does not block request threads.
 
 ### 7.1 Local accounts (backup)
-- `/account/setup` creates the first local account only when **no directory is configured and no local account exists**, as in OpenNotifier. Otherwise a signed-in admin creates local accounts in Settings, so an anonymous visitor can never create one.
+- `/account/setup` creates the first local account only when **no directory is configured and no local account exists**. Otherwise a signed-in admin creates local accounts in Settings, so an anonymous visitor can never create one.
 - The sign-in page has a choice: **Domain account** or **Local account**. Local accounts work when the directory is unreachable, so admins are never locked out. Agents keep receiving announcements from the synced data either way.
 - Settings → Local accounts: add, reset password, disable. Local accounts have full admin rights.
 - Passwords are PBKDF2-SHA256 hashes. Failed sign-ins are rate-limited per account and per IP.
@@ -247,21 +245,21 @@ What changes compared with OpenNotifier. Item 1 is the domain sign-in, next to t
 ## 8. Announcements, delivery and confirmations
 
 ### 8.1 Announcement
-The same fields as OpenNotifier: title, Markdown body, buttons, questions (single or multiple choice, required), unlock mode, minimum seconds, start and end time, times shown per user, repeat interval, anonymous-answers flag, targets.
+Fields: title, Markdown body, buttons, questions (single or multiple choice, required), unlock mode, minimum seconds, start and end time, times shown per user, repeat interval, anonymous-answers flag, targets.
 
-Changes:
+Rules:
 - **Stable IDs on edit.** Buttons, questions and options are updated in place, not deleted and recreated. A window that is already open can therefore still be confirmed.
 - A question that already has answers cannot be deleted, only hidden.
 - **Status:** Draft (proposal P8), Scheduled, Active, Ended.
 
 ### 8.2 Targeting
 - Kinds: User, Computer, UserGroup, ComputerGroup, OU (proposal P5), chosen from the synced directory or from enrolled computers.
-- Matching is the same as OpenNotifier's: no targets means everyone, and otherwise any matching target is enough.
+- Matching: no targets means everyone, and otherwise any matching target is enough.
 - Group membership comes from the synced tables (section 7).
 
 ### 8.3 Delivery and read confirmations
 - `Delivery` (new, proposal P8): AnnouncementId, ComputerId, UserName, SentAtUtc, ShownAtUtc?
-- `Confirmation` (OpenNotifier's `Acknowledgement`): AnnouncementId, DeliveryId, ComputerId, UserName, ButtonId, ButtonLabel, ConfirmedAtUtc.
+- `Confirmation`: AnnouncementId, DeliveryId, ComputerId, UserName, ButtonId, ButtonLabel, ConfirmedAtUtc.
 - **Computer** is taken from the connection, as in section 3.4. **User** is the one in the delivery, as reported by the agent.
 
 ### 8.4 Anonymous answers
@@ -275,14 +273,14 @@ For an announcement with anonymous answers on:
   - Within one batch window, someone with direct database access could still narrow down who answered by timing. The Console cannot.
 - In the Console, anonymous answers can only be filtered by announcement, question and option, never by user, computer or time.
 
-Named answers keep their link to the confirmation, as in OpenNotifier.
+Named answers keep their link to the confirmation.
 
 ---
 
 ## 9. Console
 
-### 9.1 Look and layout, after ESET PROTECT
-The aim is the same way of working, not a copy. No ESET name, logo, icons or other assets are used.
+### 9.1 Look and layout
+The layout of a management console: navigation on the left, groups in a tree, lists in grids, details on their own pages. All names, icons and assets are DomainNotice's own.
 
 - **Left navigation bar** (dark, icons and labels, collapsible): Dashboard, Computers, Announcements, Confirmations, Answers, History, Agent updates, Directory, Settings, Audit log (proposal P3). A badge shows when a newer release is available.
 - **Top bar:** global search box, signed-in user, sign out.
@@ -378,7 +376,7 @@ Sign-in is a cookie after a domain or local sign-in, as in section 7.
   - tests replay recorded messages from every older agent version against the current server.
 
 ### 11.2 Server and Console update (button in the Console)
-This works like Nginx UI's upgrade page, under Settings → About and updates:
+An upgrade page under Settings → About and updates:
 - It shows the current version, the latest release on GitHub with its release notes, and an **Update now** button.
 - The server checks for releases every `Updates:CheckIntervalHours` (default 24) and when an admin clicks "Check now".
 
@@ -407,7 +405,7 @@ Details:
 - Every update is logged, and written to the audit log if P3 is kept.
 
 ### 11.3 Agent update (server sends an update command)
-This works like Wazuh's agent upgrade: the server sends an update command, and the agent reports back how it went.
+The server sends an update command, and the agent reports back how it went.
 - Admins start it from the Console with "Update agent" on one computer, the selected computers, or all outdated ones (Computers grid, Dashboard tile).
 - The target is always **the server's own version**, never newer.
 
@@ -428,11 +426,11 @@ Limits:
 - Tasks have their own list in the Console, with the same filters as the other lists.
 
 ### 11.4 GitHub releases
-- Config `Updates:GitHubRepository` (`owner/name`) is **blank for now**. While it is blank:
+- Config `Updates:GitHubRepository` (`owner/name`) defaults to `BarPos/DomainNotice`. Set to blank, updates are off:
   - no network calls are made;
   - the update pages say "Updates are not configured";
   - the update buttons are disabled.
-- The code is still built and tested, against a fake release source. Setting the repository after the project is published on GitHub turns updates on, or a release can ship with it as the default.
+- Tests run against a fake release source and make no network calls.
 - **Server:** it reads `GET /repos/{owner}/{repo}/releases/latest`, or the newest prerelease when `Updates:Channel` is `prerelease`.
   - Without a token, the GitHub API allows 60 requests an hour per IP, and one check a day is far below that.
   - `Updates:GitHubToken` is optional, for a private repository.
@@ -516,13 +514,13 @@ Re-running the script on an installed server offers **repair** or **upgrade**, a
 These came up while planning. All of them were accepted in round 4, except P10 (signing), which is deferred.
 
 - **P1 Server-side confirmation checks.** Reject a confirmation outside the time window, beyond the display limit, with a required question unanswered, or sooner than the minimum time after `Shown`. This is not identity checking, so it does not conflict with request 13.
-- **P2 Display limits count deliveries shown**, not confirmations as in OpenNotifier.
+- **P2 Display limits count deliveries shown**, not confirmations.
 - **P3 Audit log** of Console actions: who created, edited or deleted an announcement, and who revoked a computer or changed the install password.
 - **P4 Roles:** `AdminGroups` (full access) and `ViewerGroups` (read-only).
-- **P5 The OU target kind** and the AD sync tables. Section 7 relies on these; without them, targeting falls back to live LDAP lookups as in OpenNotifier.
+- **P5 The OU target kind** and the AD sync tables. Section 7 relies on these; without them, targeting falls back to live LDAP lookups.
 - **P6 IP history**, using the same retention as name and user history.
 - **P7 "Send announcement to selected computers"** from the Computers grid.
-- **P8 Delivery tracking and drafts.** A `Delivery` row per announcement, computer and user, with the time it was sent and shown (`Show`/`Shown` messages), plus a Draft status for announcements. P1 and P2 depend on it; without it, the agent works from the announcement id as in OpenNotifier.
+- **P8 Delivery tracking and drafts.** A `Delivery` row per announcement, computer and user, with the time it was sent and shown (`Show`/`Shown` messages), plus a Draft status for announcements. P1 and P2 depend on it; without it, the agent works from the announcement id alone.
 - ~~P9 Server relays agent updates~~: accepted in round 3, now part of section 11.3.
 - **P13 Import a local agent MSI.** Upload a locally built MSI into the server's package cache from Settings, so first installs and agent updates work before the GitHub repository exists. Without it, the cache stays empty until then, and first installs use the MSI from `build-agent-msi.ps1` directly.
 - **P10 Signed releases** (deferred, not in the first version). Sign `SHA256SUMS.txt` with a project key whose public half is built into the Server and Agent, and Authenticode-sign the MSI. Updates are refused if the signature fails.
@@ -587,252 +585,3 @@ No decisions are open.
 6. **Console:** layout, the shared grid with filters, every page, settings.
 7. **Install and updates:** `install.sh` on Ubuntu 24.04; the release source (GitHub, with a fake source for tests); server self-update with `update.sh`, the systemd units and rollback; the agent package cache, chunked transfer and update tasks. Everything that needs GitHub stays off while `Updates:GitHubRepository` is blank.
 8. **Tests and hardening:** tests for each step, rate limits, message limits, logging, and old-agent message replay.
-
----
-
-# Appendix A — How OpenNotifier works (reference)
-
-A description of `../OpenNotifier` as it is today. DomainNotice starts from it; the plan above says what changes.
-
----
-
-## A.1 What it is
-
-OpenNotifier sends announcements to Windows PCs in a domain.
-
-- An administrator writes an announcement in a web app. It has Markdown text, buttons, optional questions, a schedule and a target audience.
-- A small tray client on every PC polls the server. When something is due, it shows a borderless, always-on-top window that cannot be closed until the person clicks a button.
-- The server stores who clicked which button, and their answers, which can be named or anonymous. Admins see the results and can export them as CSV.
-
-### Solution layout (`OpenNotifier.slnx`, all .NET 10)
-
-| Project | Type | Role |
-|---|---|---|
-| `OpenNotifier.Shared` | class library | Wire DTOs, enums, `DismissRules`, `AppVersion`. Referenced by server and client. |
-| `OpenNotifier.Server` | ASP.NET Core (Razor Pages + minimal API) | Admin web UI, client API, SQLite via EF Core, LDAP integration. Cross-platform. |
-| `OpenNotifier.Client` | WPF + WinForms `WinExe` (`net10.0-windows`) | Tray app, poller, announcement window. Published self-contained for win-x64. |
-| `OpenNotifier.Installer` | WiX 5 `.wixproj` | Per-machine MSI for the client. Excluded from the solution build. |
-| `OpenNotifier.Server.Tests` | xUnit | Rules tests and service tests that use in-memory SQLite. |
-
-`build-client-msi.ps1` at the root publishes the client and builds the MSI.
-
-### Versioning
-
-- One version, `1.0.0`, is kept in two places by hand: `Directory.Build.props` and `OpenNotifier.Shared/AppVersion.cs`.
-- `AppVersion.AreCompatible()` checks for an **exact string match**. A client whose version differs gets `Compatible = false` and no announcements.
-- There is no auto-update. A newer MSI replaces the older one through `MajorUpgrade`, and downgrades are refused.
-
----
-
-## A.2 End-to-end flow
-
-```
-Admin browser ──(cookie auth)──► Razor Pages ──► AnnouncementService ──► SQLite (App_Data/opennotifier.db)
-                                      │                     │
-                                      └── htmx partials     └── IDirectoryGateway ──LDAP(S)──► Domain controller
-                                                                         ▲
-Windows PC: OpenNotifier.Client (tray)                                   │ group membership
-   every 60s ── POST /api/client/poll {user, computer, version} ─────────┘
-            ◄── { compatible, serverVersion, announcement? }
-   shows AnnouncementWindow (modal, topmost, unclosable)
-   user clicks button ── POST /api/client/ack {announcementId, user, computer, buttonId, answers[]}
-   immediately polls again (next due item), else waits 60s
-```
-
-1. **Author.** The admin signs in and creates an announcement on `/announcements/edit`. It has a title, Markdown body with live preview, unlock rule, minimum seconds, anonymous-answers flag, start and end time, max displays, repeat interval, buttons, questions with options, and targets.
-2. **Poll.** The client sends `DOMAIN\user`, the machine name and its version. The server returns at most **one** due announcement.
-3. **Show.** The client renders the Markdown into a WPF `FlowDocument` and draws radio buttons or checkboxes for the questions. The buttons stay disabled until `DismissRules.CanSubmit` passes.
-4. **Ack.** The click is posted. The server saves an `Acknowledgement` row, plus an `AnswerBatch` if any answers were given.
-5. **Repeat.** After an ack, the client loops and polls again at once, so several due announcements show one after another. Otherwise it waits 60s.
-6. **Results.** `/announcements/results/{id}` lists submissions and answers, with two CSV downloads.
-
----
-
-## A.3 Wire contract (`OpenNotifier.Shared/Contracts.cs`)
-
-Both endpoints are in `ClientEndpoints.cs`. They are **anonymous** and use **no antiforgery**. Enums are serialized as strings (`JsonStringEnumConverter` on both sides).
-
-### `POST /api/client/poll`
-- Request `PollRequest { UserName, ComputerName, ClientVersion }`
-- Response `PollResponse { Compatible, ServerVersion, Announcement: PendingAnnouncement? }`
-- `PendingAnnouncement { Id, Title, BodyMarkdown, MinDismissSeconds, UnlockMode, Buttons[{Id, Label}], Questions[{Id, Prompt, Kind, Required, Options[{Id, Label}]}] }`
-
-### `POST /api/client/ack`
-- Request `AckRequest { AnnouncementId, UserName, ComputerName, ButtonId, Answers[{QuestionId, OptionIds[]}] }`
-- Response `AckResponse { Accepted, Error? }`. A rejected ack returns 400.
-
-### Shared enums and rules
-- `UnlockMode`: `AfterTime`, `AfterRequired`, `AfterTimeAndRequired` (the default).
-- `QuestionKind`: `Single`, `Multiple`.
-- `DismissRules.CanSubmit(mode, minSeconds, elapsed, requiredSatisfied)` and `RequiredSatisfied(...)`. **Only the client calls these.** The server does not re-check them.
-
----
-
-## A.4 Data model (`Server/Data`)
-
-The schema is created at startup with `Database.EnsureCreatedAsync()`. There are **no migrations**. The default connection string is `Data Source=App_Data/opennotifier.db`, resolved against the content root, and the folder is created if it is missing.
-
-```
-Announcement (Id, Title≤200, BodyMarkdown, MinDismissSeconds, UnlockMode, AnonymousAnswers,
-              StartUtc, EndUtc, MaxDisplays=1, RepeatIntervalMinutes, CreatedAtUtc)
- ├─ AnnouncementButton   (Label, SortOrder)
- ├─ AnnouncementQuestion (Prompt, Kind, Required, SortOrder)
- │    └─ QuestionOption  (Label, SortOrder)
- ├─ AnnouncementTarget   (Kind: User|Computer|UserGroup|ComputerGroup, Name)
- ├─ Acknowledgement      (UserName, UserKey, ComputerName, ButtonId, ButtonLabel, SubmittedAtUtc)
- │                        index (AnnouncementId, UserKey)
- └─ AnswerBatch          (AcknowledgementId? – null when anonymous, SubmittedAtUtc)
-      └─ Answer          (QuestionId, QuestionPrompt)
-           └─ AnswerSelection (OptionId, OptionLabel, SortOrder)
-LocalAdmin (UserName unique, PasswordHash, PasswordSalt)   – PBKDF2-SHA256, 100k iterations
-```
-
-- Every child of `Announcement` cascades on delete. Deleting an announcement removes all of its results.
-- Acks and answers keep **snapshots** of the button label, question prompt and option label. They have no FK to the button, question or option rows, so results stay readable after the announcement is edited.
-- **Editing** an announcement deletes all of its buttons, questions, options and targets and recreates them with **new GUIDs**.
-
----
-
-## A.5 Eligibility and targeting
-
-The rules are in `Services/Eligibility.cs` and `AnnouncementService.FindDueAsync`.
-
-1. Load announcements where `StartUtc ≤ now ≤ EndUtc`, ordered by `StartUtc` and then `CreatedAtUtc`.
-2. Load this user's previous ack times. `UserKey` is the reported name, trimmed and lowercased, for example `corp\alice`.
-3. For each announcement, in order, it is due when all of these hold:
-   - the user's ack count is below `MaxDisplays`. This counts **acknowledgements, not displays**, and it is **per user, not per computer**;
-   - when `MaxDisplays > 1` and the user has acked before, `now ≥ lastAck + RepeatIntervalMinutes`;
-   - the audience matches:
-     - **no targets** means everyone;
-     - otherwise **any** target can match (OR):
-       - `User`: case-insensitive. A bare `alice` also matches a reported `CORP\alice` or `alice@corp`.
-       - `Computer`: case-insensitive exact match.
-       - `UserGroup` and `ComputerGroup`: an LDAP lookup. These **never match when the directory is disabled**, and a lookup failure counts as no match, with a warning logged.
-4. The first due announcement is returned.
-
-There is one LDAP membership query per group target per poll, cached in `IMemoryCache` for 5 minutes per (identity, group).
-
----
-
-## A.6 Directory (Active Directory over LDAP)
-
-The configuration is `Directory` in `appsettings.json`, bound to `DirectoryOptions`:
-`Enabled, Host, Port (636), UseSsl (true), AcceptInvalidCertificate, BaseDn, BindUser, BindPassword, AdminGroups[]`.
-The directory counts as configured when `Enabled` is set and `Host` and `BaseDn` are filled in.
-
-The implementation is `LdapDirectoryGateway`, using `System.DirectoryServices.Protocols`. It works on Linux, macOS and Windows, and the server does not need to join the domain.
-
-- **Connect.** It uses a Basic bind. A short name becomes `name@domain.from.basedn`. With `UseSsl` it uses LDAPS. Without it, it tries plain LDAP first and falls back to StartTLS when the DC demands strong auth (error 8). `AcceptInvalidCertificate` turns off certificate checks: on Windows through a callback, and elsewhere through `setenv("LDAPTLS_REQCERT","never")`. The 15s timeout and the synchronous calls are wrapped in `Task.FromResult`.
-- **Admin sign-in.** It binds **as the user** with their password, then checks whether the user is in any of the `AdminGroups`, nested membership included.
-- **Group membership.** It binds as the **service account** and searches with `memberOf:1.2.840.113556.1.4.1941:=<groupDN>` (the transitive chain rule). Computers match on `sAMAccountName$`, `cn` or `dNSHostName`.
-- **Picker.** It supports browsing one level (OUs, containers, users, computers, groups, up to 300 entries) and a subtree search (`*term*` on cn, name, displayName and sAMAccountName, up to 50 entries). Navigation cannot leave `BaseDn`.
-- **Save validation.** When the directory is on, every target must exist in LDAP before the announcement can be saved.
-- **Filter escaping.** `LdapFilters.Escape` escapes `\ * ( ) NUL`.
-
-### Without a directory
-- The first visit redirects to `/account/setup`, which creates one local admin with a password of at least 8 characters. After that, `/account/login` checks local admins.
-- Targets are typed by hand. Group targets are accepted but never match, and a banner says so.
-
----
-
-## A.7 Admin web UI
-
-- Razor Pages with `htmx.min.js` and `site.css`, and no SPA. Cookie auth (`OpenNotifier.Admin`) applies to every page through a fallback policy. Only `/account/login` and `/account/setup` allow anonymous access.
-- Pages:
-  - `/`: the list of announcements.
-  - `/announcements/edit/{id?}`: the editor.
-  - `/announcements/results/{id}`: results, plus the `?handler=ExportSubmissions|ExportAnswers` CSV downloads.
-  - `/announcements/delete/{id}`: delete confirmation.
-  - `/account/login|logout|setup`.
-- htmx partial endpoints under `/announcements/partials/{button|question|option|target}` add rows to the form. Indexes come from a `data-next-index` counter in JS, and the rows bind as `Form.Buttons[i]`.
-- `/announcements/directory?handler=Browse|Search|Select` drives the directory picker inside each target row.
-- `/announcements/preview` renders Markdown with Markdig and raw HTML disabled. A layout script sends the antiforgery token as a header on htmx requests.
-- Times are entered and shown in **server local time** and stored as UTC (`LocalTime` helper). A new announcement defaults to now through now + 7 days, with one "OK" button, 10 seconds, and `AfterTimeAndRequired`.
-- The CSVs are UTF-8 with a BOM. The submissions CSV has Announcement, User, Computer, Time and Button. The answers CSV has User, Computer, Time, Question and Selected options; when the announcement is anonymous, only Question and Selected options.
-
----
-
-## A.8 Windows client
-
-- **Startup (`App.xaml.cs`).** A `Local\OpenNotifier.Client` mutex allows one instance per logon session. `--write-config <url>` writes the config file and exits. `ShutdownMode=OnExplicitShutdown`.
-- **Tray (`TrayHost`).** A WinForms `NotifyIcon` with a single **Exit** menu item, which sets `AnnouncementWindow.ForceClose` and shuts down. Balloon tips report a missing config or a version mismatch, once per run.
-- **Poller (`AnnouncementPoller`).**
-  - Uses a `DispatcherTimer` every 60s and an `HttpClient` with a 20s timeout.
-  - Reloads the config on every tick.
-  - Reports the user as `Environment.UserDomainName\UserName` and the computer as `Environment.MachineName`.
-  - `ShowDialog()` blocks the loop while the window is open.
-  - A failed ack is logged, and the announcement appears again on a later poll because nothing was recorded.
-- **Window (`AnnouncementWindow`).** 680×560, `WindowStyle=None`, `Topmost`, resizable, centred. Closing is cancelled unless the person submitted or `ForceClose` is set, and Esc and Alt+F4 are swallowed. A 200 ms timer refreshes the countdown text and the button state. `MarkdownView` converts the Markdig AST into WPF blocks: headings, paragraphs, lists, quotes, code, emphasis, and http/https links that open in the browser.
-- **Config (`ClientConfig`).** It reads `HKLM\Software\OpenNotifier\ServerUrl` **first** and, when the file is missing, mirrors that value to `%ProgramData%\OpenNotifier\client.json`. If the registry value is absent, it falls back to `client.json`.
-- **Log.** `%ProgramData%\OpenNotifier\client.log`, append-only, and log failures are swallowed.
-
----
-
-## A.9 Installer and build
-
-- `build-client-msi.ps1 -ServerUrl http://server:5150` reads the version from `Directory.Build.props`, runs `dotnet publish` for the client (win-x64, self-contained) into `artifacts/client-publish`, builds the wixproj, and copies the result to `artifacts/OpenNotifier.Client-<ver>.msi`.
-- `Package.wxs`, per machine:
-  - Installs to `Program Files\OpenNotifier Client`.
-  - The `SERVERURL` property defaults to the build value and can be overridden with `msiexec ... SERVERURL=`. A launch condition requires it.
-  - Writes `HKLM\Software\OpenNotifier\ServerUrl`.
-  - Creates `%ProgramData%\OpenNotifier` and grants **Users GenericAll** on it.
-  - Adds an autostart entry under `HKLM\...\Run\OpenNotifier`.
-  - A deferred custom action runs `write-client-config.ps1` to write `client.json` from the registry. The script path is **hardcoded** as `C:\Program Files\OpenNotifier Client\...`, and the action uses `Return="ignore"`.
-  - One custom dialog asks for the server URL. The standard WiX UI is not used.
-  - `MajorUpgrade` with `AllowSameVersionUpgrades`.
-
----
-
-## A.10 Tests (`OpenNotifier.Server.Tests`)
-
-- **`RulesTests`:**
-  - eligibility: time window, empty targets, OR matching, display count and interval;
-  - user and computer name matching;
-  - `DismissRules`;
-  - LDAP escaping and chain-rule filters;
-  - CSV columns for anonymous and named answers;
-  - the DN base check, object classification and bind-name formatting.
-- **`AnnouncementServiceTests`**, using in-memory SQLite and a fake directory:
-  - a version mismatch is rejected;
-  - a targeted poll works;
-  - group targets match only when the directory is configured;
-  - anonymous and named answer linkage;
-  - delete cascades, and a later ack is rejected;
-  - the repeat interval;
-  - save validation against the directory.
-- There are no tests for the client, the UI or the installer.
-
----
-
-## A.11 Observed behaviours and gaps (facts, not proposals)
-
-**Trust and security**
-- The client API has no authentication. Anyone who can reach the server can poll as any user or computer, list announcements targeted at them, and post acks on their behalf. Identity is self-reported.
-- The server never checks an ack against eligibility, the time window, `MaxDisplays`, required questions or the minimum time. It only checks that the announcement and button exist.
-- The LDAP bind password is stored in plain text in `appsettings.json`, and the sample config has `AcceptInvalidCertificate=true`.
-- Users have full control of `%ProgramData%\OpenNotifier`. The registry value takes precedence over `client.json`, so this mostly affects the log and the fallback config.
-- An anonymous `AnswerBatch` keeps the same `SubmittedAtUtc` as its `Acknowledgement`. Matching the two timestamps can reveal who gave which answer.
-
-**Behaviour**
-- Display limits and repeats are counted per **user** across all computers, and by acks rather than by how many times the window was shown.
-- Editing an announcement while it is live regenerates the button and question IDs. A window that is already open will have its ack rejected, so the announcement is shown again.
-- Only one announcement is served per poll. Several due ones are shown one after another.
-- The client's Exit menu item lets any user close the client and skip announcements until their next logon.
-- The LDAP calls are synchronous, so a slow DC blocks the request threads. Each uncached group lookup opens a new connection.
-- `EnsureCreated` without migrations means any schema change needs a manual DB reset or migration.
-- There is no audit of which admin created or edited what. `CreatedAtUtc` is the only metadata.
-
-**Inconsistencies**
-- The dev server port (`launchSettings`) is **5172**, while the installer default and the README examples use **5150**.
-- The README says the client reads `client.json`. In fact the registry value comes first.
-- The client has a `--write-config` switch, but the MSI uses a PowerShell custom action instead.
-- The version string is duplicated in the props file and `AppVersion.cs` and kept in sync by hand.
-
----
-
-## A.12 DomainNotice today
-
-`DomainNotice` contains only `DomainNotice.sln`, the same `Directory.Build.props` (1.0.0, nullable, implicit usings) and `DomainNotice.Shared` with `AppVersion.cs`, copied from OpenNotifier. Its comment already says "server, **agent**, and MSI" where OpenNotifier says "client". Nothing else has been created yet.
-
----
-

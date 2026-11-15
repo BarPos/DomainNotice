@@ -36,7 +36,7 @@ public interface IAnnouncementResults
     Task<AnnouncementResultsSummary?> GetSummaryAsync(Guid announcementId, CancellationToken ct = default);
 }
 
-/// <summary>CSV exports (plan A.7), UTF-8 with BOM. Times are server local time "yyyy-MM-dd HH:mm:ss".</summary>
+/// <summary>CSV exports, UTF-8 with BOM. Times are server local time "yyyy-MM-dd HH:mm:ss".</summary>
 internal sealed class ResultsExport(IDbContextFactory<AppDbContext> dbFactory) : IResultsExport, IAnnouncementResults
 {
     private static readonly Encoding Utf8Bom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
