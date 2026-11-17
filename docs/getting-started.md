@@ -15,6 +15,8 @@ This page takes you from an empty Ubuntu machine to the first announcement on a 
 
 - **Server:** Ubuntu 24.04 LTS or newer (x64 or arm64), with root access.
   - PostgreSQL 16+ can be installed by the installer, or you can point it at an existing server.
+  - A PostgreSQL already on this machine can keep serving other applications: the installer only adds its own role
+    and database to it (see [Sharing PostgreSQL](server/installation.md#sharing-postgresql-with-other-applications)).
   - No Docker and no .NET runtime are needed; the server is self-contained.
 - **Network:**
   - Browsers reach the server on the Console port (default **443/tcp**).
@@ -37,7 +39,8 @@ Offline: copy `DomainNotice.Server-<version>-linux-x64.tar.gz` (or `-linux-arm64
 `sudo bash install.sh --package DomainNotice.Server-<version>-linux-x64.tar.gz`.
 
 The installer asks for:
-- the database: install PostgreSQL locally, or use an existing server;
+- the database: PostgreSQL on this machine (installed when missing; one that is already there is shared, and gets only a
+  new `domainnotice` role and database), or a PostgreSQL server elsewhere;
 - the Console port and certificate: an existing PEM certificate, or a generated self-signed one;
 - the first local admin account.
 

@@ -38,6 +38,8 @@ which button they clicked and how they answered optional questions; answers can 
 - **Operations:**
   - One-command backup and restore of the database, configuration, keys and program.
   - Password reset for local accounts, and a clean uninstall, from the installer.
+  - Can share the machine's PostgreSQL with other applications: install, backups, restores and uninstall touch only
+    DomainNotice's own role and database.
   - The Console is served over HTTPS, or plain HTTP when something in front of it handles HTTPS.
 - **Updates:**
   - A Console button updates the server (Ubuntu), with automatic rollback.

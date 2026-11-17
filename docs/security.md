@@ -165,6 +165,18 @@ user or remove it from the groups and run **Sync now**. A configured group DN ou
 membership in it is not re-checked; membership through a nested group outside `BaseDn` passes the sign-in but not the
 re-check, so such a user is signed out after each sync. Primary-group membership never counts.
 
+## Database
+
+- With `--db=local` the installer creates DomainNotice's own role, with no superuser, database-creation or
+  role-creation rights, and its own database, which only that role (and superusers) may connect to. A PostgreSQL that
+  other applications use is shared: their roles and databases are never altered, and PostgreSQL is not reinstalled,
+  upgraded, reconfigured or restarted. See
+  [Sharing PostgreSQL](server/installation.md#sharing-postgresql-with-other-applications).
+- The server, `update.sh` and `backup.sh` connect as that role. Backups dump only its database; restores and update
+  rollbacks replace the tables in it and nothing else.
+- `--uninstall` drops only that database and role, and only when the database is owned by the role and the role is not
+  a superuser.
+
 ## Secrets
 
 | Secret | Where |

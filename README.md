@@ -14,7 +14,8 @@ clicked and how they answered optional (single or multiple choice, optionally an
 
 - **Server + Console** on Ubuntu 24.04+:
   - one self-contained systemd service with PostgreSQL;
-  - an installer that can set up PostgreSQL for you, serve the Console over HTTPS or plain HTTP, and back up,
+  - an installer that can set up PostgreSQL for you, or share one already on the machine (it only adds its own role
+    and database and never changes anything else on it), serve the Console over HTTPS or plain HTTP, and back up,
     restore, reset passwords and uninstall;
   - a Console button for self-update with rollback.
 - **Windows agent:**

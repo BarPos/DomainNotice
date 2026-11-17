@@ -44,6 +44,9 @@ Other clients get 404. `update.sh` uses it.
 
 ## Backup and restore
 
+Backup, restore and update rollbacks work only on DomainNotice's own database, as its own role. On a PostgreSQL shared
+with other applications, their databases are neither included nor touched.
+
 `/opt/domainnotice/bin/backup.sh` (also available as `install.sh --backup` / `--restore`) puts everything in one archive:
 - the **database**: a `pg_dump` of DomainNotice's own database only, made as its role (other databases on a shared
   PostgreSQL are not included and not touched);

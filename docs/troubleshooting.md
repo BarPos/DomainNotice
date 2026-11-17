@@ -26,6 +26,25 @@ nav_order: 11
 - Check that PostgreSQL is reachable with the connection string. The server applies migrations at start.
 - Run `sudo ./install.sh --repair` to restore the units, owners and modes.
 
+## The installer stops at the database step
+
+- *cannot connect to 127.0.0.1:PORT as 'domainnotice' with a password*: the machine's PostgreSQL does not allow
+  password logins from localhost. The installer has already removed the role and database it created. Add the line it
+  shows to `pg_hba.conf` (for example `host domainnotice domainnotice 127.0.0.1/32 scram-sha-256`), reload PostgreSQL
+  (`systemctl reload postgresql`) and run the installer again. It never edits `pg_hba.conf` itself.
+- *the database 'X' already exists* or *the role 'X' already exists*: a name given with `--db-name` / `--db-user` is
+  taken. DomainNotice never takes over existing roles or databases: choose another name, or leave both options out
+  to get the first free one of `domainnotice`, `domainnotice_2`, …
+- *several PostgreSQL clusters are running*: choose one with `--db-port` (see `pg_lsclusters`).
+- *PostgreSQL 16 or newer is required*: the machine's cluster is older. The installer does not upgrade it; upgrade it
+  yourself, or use `--db=existing` with a PostgreSQL 16+ server elsewhere.
+- *port 5432 is in use, but there is no PostgreSQL cluster from Ubuntu's packages*: something else (for example a
+  PostgreSQL in a container) uses the port. Make a role and database for DomainNotice on it and install with
+  `--db=existing`.
+- The database is called `domainnotice_2` (or higher): a role or database named `domainnotice` already existed, for
+  example from another application or an install removed with `--keep-data`. That is expected; the name is in
+  `/opt/domainnotice/config/install.state`.
+
 ## A PC does not appear in the Console
 
 1. **On the PC:** `services.msc` → *DomainNotice Agent* is running. If not, look in the Event Log.

@@ -52,6 +52,16 @@ the tests with `dotnet test --project DomainNotice.Server.Tests -- --filter-name
 | `Console/` | Grid filter translation, anonymous-answer queries, full-host smoke test |
 | `FrozenProtocolTests` | Golden 1.0.0 messages of the frozen protocol |
 
+The installer and the root scripts have container tests (Docker, `ubuntu:24.04`, `systemctl` stubbed). Build a server
+tarball first (`build/build-server.sh`), then pass the folder that holds it:
+
+| Script | Covers |
+|---|---|
+| `deploy/linux/tests/container-run-smoke.sh artifacts` | Fresh install with a real PostgreSQL, the server in Production, sign-in and pages |
+| `deploy/linux/tests/container-smoke.sh artifacts` | Install, upgrade and repair paths; links and tampered files planted by the service user |
+| `deploy/linux/tests/container-maint-smoke.sh artifacts` | Backup, restore, password reset, uninstall; unsafe archives refused |
+| `deploy/linux/tests/container-sharedpg-smoke.sh artifacts` | A PostgreSQL shared with another application (including a role and database named `domainnotice`, and a second cluster): install, backup, restore, uninstall and a failed install change only DomainNotice's own role and database |
+
 ## Database migrations
 
 After changing the model in `DomainNotice.Server.Core/Data`:
@@ -66,7 +76,7 @@ dotnet ef migrations add <Name> --project DomainNotice.Server --output-dir Data/
 
 `testenv/` starts two containers:
 - a **Samba AD DC** with seeded users, groups, OUs and computers;
-- an **Ubuntu 24.04 with real systemd**, on which `install.sh` installs the server and PostgreSQL.
+- an **Ubuntu 24.04 with real systemd**, on which `install.sh` installs the server and PostgreSQL (`--db=local`).
 
 It also contains `testenv/probe`, a fake agent for simulating PCs. See
 [`testenv/README.md`](https://github.com/BarPos/DomainNotice/blob/main/testenv/README.md).
