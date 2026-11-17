@@ -19,7 +19,11 @@
 #                         --repair uses a package only when one of them is given: then update.sh, backup.sh and the
 #                         units are reinstalled from it; without, the installed copies are kept.
 # Database:
-#   --db=local|existing   local: install PostgreSQL here (role and database "domainnotice", localhost only)
+#   --db=local|existing   local: PostgreSQL on this machine. Installed when there is none; an existing one (that
+#                         other applications may use) is used as it is: DomainNotice only adds its own new role and
+#                         database (named "domainnotice", or "domainnotice_2" ... when that name is taken) and never
+#                         installs, upgrades, reconfigures or restarts the server or changes other roles and databases.
+#                         --db-port picks the cluster when there are several; --db-name sets the name (it must be free).
 #   --db-host H --db-port P --db-name N --db-user U --db-sslmode disable|allow|prefer|require|verify-ca|verify-full
 # Console:
 #   --console-mode=https|http   https (default): HTTPS with a certificate. http: plain HTTP, no certificate
@@ -58,7 +62,7 @@ USER_AGENT="DomainNotice-Installer"
 MODE="" UNATTENDED=0 ASSUME_YES=0
 BACKUP_OUTPUT="" RESTORE_FILE="" RESET_USER="" KEEP_DATA=0 BACKUP_TO=""
 PACKAGE="" VERSION_ARG=""
-DB_MODE="" DB_HOST="" DB_PORT="" DB_NAME="" DB_USER="" DB_SSLMODE=""
+DB_MODE="" DB_HOST="" DB_PORT="" DB_NAME="" DB_USER="" DB_SSLMODE="" DB_CREATED=0
 CONSOLE_PORT="" SERVER_NAME="" CERT_FILE="" CERT_KEY_FILE="" ADMIN_USER="" OPEN_FIREWALL="" CONSOLE_MODE=""
 SECRETS_FILE="" SECRETS_STDIN=0
 DB_PASSWORD="" ADMIN_PASSWORD=""
@@ -71,7 +75,17 @@ warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
-cleanup() { if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf -- "$WORK"; fi; }
+INSTALL_DONE=0
+cleanup() {
+    if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf -- "$WORK"; fi
+    # A fresh install that failed after creating its own role and database removes them again (and only them), so a
+    # second attempt starts clean instead of moving on to domainnotice_2.
+    if [[ "${DB_CREATED:-0}" -eq 1 && $INSTALL_DONE -eq 0 && "$DB_MODE" == local ]]; then
+        warn "the install did not finish: removing the database '$DB_NAME' and role '$DB_USER' it created"
+        runuser -u postgres -- psql -X -q -p "$DB_PORT" -d postgres -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null 2>&1 || true
+        runuser -u postgres -- psql -X -q -p "$DB_PORT" -d postgres -c "DROP ROLE IF EXISTS \"$DB_USER\"" >/dev/null 2>&1 || true
+    fi
+}
 trap cleanup EXIT
 trap 'die "install.sh failed at line $LINENO"' ERR
 
@@ -283,7 +297,10 @@ install_packages() {
     info "Installing packages"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -q
-    local pkgs=(ca-certificates curl tar openssl tzdata postgresql-client)
+    local pkgs=(ca-certificates curl tar openssl tzdata)
+    # A PostgreSQL client is already there when this machine runs PostgreSQL (shared with other applications): keep it
+    # as it is. ensure_pg_client adds a matching pg_dump later when the server needs a newer one.
+    command -v psql >/dev/null 2>&1 || pkgs+=(postgresql-client)
     local icu
     icu="$(apt-cache pkgnames libicu 2>/dev/null | grep -E '^libicu[0-9]+$' | sort -V | tail -n1 || true)"
     [[ -n "$icu" ]] || die "no ICU library package (libicuNN) found"
@@ -295,7 +312,8 @@ install_packages() {
     # OpenLDAP client library: System.DirectoryServices.Protocols loads libldap.so.2, from libldap2
     # (confirmed on Ubuntu 24.04).
     pkgs+=(libldap2)
-    apt-get install -y -q --no-install-recommends "${pkgs[@]}"
+    # --no-upgrade: packages that are already installed (libraries other applications use too) stay as they are.
+    apt-get install -y -q --no-install-recommends --no-upgrade "${pkgs[@]}"
 }
 
 # ------------------------------------------------------------------------------------------------ step 3: package source
@@ -516,7 +534,7 @@ ensure_pg_client() { # ensure_pg_client MAJOR: pg_dump must not be older than th
 setup_database() {
     if [[ -z "$DB_MODE" ]]; then
         if [[ $UNATTENDED -eq 1 ]]; then die "missing --db=local|existing"; fi
-        echo "Database: 1) install PostgreSQL on this machine  2) use an existing PostgreSQL server"
+        echo "Database: 1) PostgreSQL on this machine (installed if missing; an existing one is shared)  2) a PostgreSQL server elsewhere"
         local choice
         tty_read choice "Choose 1 or 2" 1
         case "$choice" in 1) DB_MODE=local ;; 2) DB_MODE=existing ;; *) die "invalid choice" ;; esac
@@ -528,37 +546,99 @@ setup_database() {
     esac
 }
 
+# ---- PostgreSQL on this machine. It may already serve other applications, so DomainNotice only ever adds its own
+# role and database: it never installs, upgrades, reconfigures or restarts an existing server, and never alters or drops
+# a role or database it did not create.
+local_pg_clusters() { # "version port status" per cluster of this machine (Ubuntu/Debian layout); empty when none
+    command -v pg_lsclusters >/dev/null 2>&1 || return 0
+    pg_lsclusters --no-header 2>/dev/null | awk 'NF >= 4 {print $1, $3, $4}'
+}
+port_in_use() { # port_in_use PORT: something listens on it (TCP)
+    command -v ss >/dev/null 2>&1 && ss -Hltn "sport = :$1" 2>/dev/null | grep -q .
+}
+pg_local() { # pg_local SQL: as the postgres superuser over the local socket, on the chosen cluster ($DB_PORT)
+    runuser -u postgres -- psql -X -At -q -v ON_ERROR_STOP=1 -p "$DB_PORT" -d postgres -c "$1"
+}
+pg_name_free() { # pg_name_free NAME: no role and no database of that name
+    [[ "$(pg_local "SELECT (SELECT count(*) FROM pg_roles WHERE rolname = '$1') + (SELECT count(*) FROM pg_database WHERE datname = '$1')")" == 0 ]]
+}
+
 setup_local_database() {
-    info "Installing PostgreSQL on this machine"
-    apt-get install -y -q --no-install-recommends postgresql
-    systemctl enable --now postgresql
-    DB_HOST=127.0.0.1 DB_PORT=5432 DB_NAME=domainnotice DB_USER=domainnotice DB_SSLMODE=prefer
+    local clusters online
+    clusters="$(local_pg_clusters)"
+    if [[ -z "$clusters" ]]; then
+        port_in_use "${DB_PORT:-5432}" && die "port ${DB_PORT:-5432} is in use, but there is no PostgreSQL cluster from Ubuntu's packages (pg_lsclusters). If it is a PostgreSQL server, use --db=existing with a role and database made for DomainNotice."
+        info "Installing PostgreSQL on this machine"
+        apt-get install -y -q --no-install-recommends postgresql
+        systemctl enable --now postgresql
+        clusters="$(local_pg_clusters)"
+        [[ -n "$clusters" ]] || die "PostgreSQL was installed but no cluster was found (pg_lsclusters)"
+    else
+        info "PostgreSQL is already installed: it is shared as it is (DomainNotice only adds its own role and database)"
+    fi
+    online="$(awk '$3 == "online" {print $2}' <<<"$clusters")"
+    if [[ -n "$DB_PORT" ]]; then
+        grep -qx -- "$DB_PORT" <<<"$online" || die "no running PostgreSQL cluster on port $DB_PORT (see pg_lsclusters)"
+    elif grep -qx 5432 <<<"$online"; then
+        DB_PORT=5432
+    elif [[ -n "$online" && "$(wc -l <<<"$online")" -eq 1 ]]; then
+        DB_PORT="$online"
+    elif [[ -z "$online" ]]; then
+        die "no PostgreSQL cluster is running (see pg_lsclusters); start it, then run the installer again"
+    else
+        die "several PostgreSQL clusters are running (ports $(tr '\n' ' ' <<<"$online")); choose one with --db-port"
+    fi
+    DB_HOST=127.0.0.1 DB_SSLMODE=prefer
+
     local num
-    num="$(runuser -u postgres -- psql -X -At -c 'SHOW server_version_num')"
-    ((num >= 160000)) || die "PostgreSQL 16 or newer is required (found $num)"
+    num="$(pg_local 'SHOW server_version_num')"
+    [[ "$num" =~ ^[0-9]+$ ]] || die "cannot query the PostgreSQL cluster on port $DB_PORT"
+    ((num >= 160000)) || die "PostgreSQL 16 or newer is required (the cluster on port $DB_PORT is $num); it is not upgraded for you"
     local listen
-    listen="$(runuser -u postgres -- psql -X -At -c 'SHOW listen_addresses')"
+    listen="$(pg_local 'SHOW listen_addresses')"
     [[ "$listen" == localhost || "$listen" == 127.0.0.1 || "$listen" == "127.0.0.1,::1" ]] ||
         warn "PostgreSQL listens on '$listen', not only on localhost"
-    DB_PASSWORD="$(random_alnum 32)"
-    # SQL on stdin, never on the command line. The password is alphanumeric, so the literal needs no escaping.
-    runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -d postgres <<SQL
-DO \$\$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'domainnotice') THEN
-    ALTER ROLE domainnotice WITH LOGIN PASSWORD '$DB_PASSWORD';
-  ELSE
-    CREATE ROLE domainnotice WITH LOGIN PASSWORD '$DB_PASSWORD';
-  END IF;
-END
-\$\$;
-SQL
-    if [[ "$(runuser -u postgres -- psql -X -At -c "SELECT 1 FROM pg_database WHERE datname = 'domainnotice'")" == 1 ]]; then
-        runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -c 'ALTER DATABASE domainnotice OWNER TO domainnotice'
+
+    # A new role and database. A name given with --db-name/--db-user must be free; otherwise the first free one of
+    # domainnotice, domainnotice_2, ... is used for both.
+    local name_re='^[a-z_][a-z0-9_]{0,62}$'
+    if [[ -n "$DB_NAME" || -n "$DB_USER" ]]; then
+        DB_NAME="${DB_NAME:-${DB_USER}}" DB_USER="${DB_USER:-${DB_NAME}}"
+        [[ "$DB_NAME" =~ $name_re && "$DB_USER" =~ $name_re ]] || die "database and role names: lowercase letters, digits and _"
+        [[ "$DB_NAME" != postgres && "$DB_NAME" != template0 && "$DB_NAME" != template1 && "$DB_USER" != postgres ]] ||
+            die "'$DB_NAME'/'$DB_USER' are PostgreSQL's own names"
+        [[ "$(pg_local "SELECT count(*) FROM pg_database WHERE datname = '$DB_NAME'")" == 0 ]] ||
+            die "the database '$DB_NAME' already exists on port $DB_PORT; DomainNotice never takes over an existing database. Choose another --db-name."
+        [[ "$(pg_local "SELECT count(*) FROM pg_roles WHERE rolname = '$DB_USER'")" == 0 ]] ||
+            die "the role '$DB_USER' already exists on port $DB_PORT; DomainNotice never takes over an existing role. Choose another --db-user."
     else
-        runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -c 'CREATE DATABASE domainnotice OWNER domainnotice'
+        local n candidate=domainnotice
+        for n in $(seq 2 99); do
+            pg_name_free "$candidate" && break
+            candidate="domainnotice_$n"
+        done
+        pg_name_free "$candidate" || die "no free role/database name domainnotice ... domainnotice_99 on port $DB_PORT"
+        [[ "$candidate" == domainnotice ]] ||
+            info "A role or database named 'domainnotice' already exists (another installation?); using '$candidate'"
+        DB_NAME="$candidate" DB_USER="$candidate"
     fi
-    pg_test_connection || die "cannot connect to the local database as domainnotice"
+
+    info "Creating the role '$DB_USER' and the database '$DB_NAME' (PostgreSQL on port $DB_PORT)"
+    DB_PASSWORD="$(random_alnum 32)"
+    # SQL on stdin, never on the command line. The password is alphanumeric and the names match $name_re, so neither
+    # needs escaping. No IF EXISTS / ALTER: the names were checked to be free, and an existing object makes this fail.
+    runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -p "$DB_PORT" -d postgres <<SQL || die "could not create the role and database"
+CREATE ROLE "$DB_USER" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$DB_PASSWORD';
+CREATE DATABASE "$DB_NAME" OWNER "$DB_USER";
+REVOKE ALL ON DATABASE "$DB_NAME" FROM PUBLIC;
+SQL
+    DB_CREATED=1
+    if ! pg_test_connection; then
+        # Remove only what this run just created, so a second attempt starts clean.
+        pg_local "DROP DATABASE IF EXISTS \"$DB_NAME\"" >/dev/null 2>&1 || true
+        pg_local "DROP ROLE IF EXISTS \"$DB_USER\"" >/dev/null 2>&1 || true
+        die "cannot connect to 127.0.0.1:$DB_PORT as '$DB_USER' with a password. If this PostgreSQL's pg_hba.conf does not allow password logins from localhost, add a line such as 'host $DB_NAME $DB_USER 127.0.0.1/32 scram-sha-256', reload PostgreSQL, and run the installer again."
+    fi
     ensure_pg_client "$((PG_SERVER_NUM / 10000))"
 }
 
@@ -667,7 +747,8 @@ write_update_env() { # root-only copy of the database settings for update.sh (pg
 write_state() {
     local tmp
     tmp="$(mktemp "$INSTALL_ROOT/config/.state.XXXXXX")"
-    printf '%s\n' "DB_MODE=$DB_MODE" "DB_NAME=$DB_NAME" "DB_USER=$DB_USER" "SERVER_NAME=$SERVER_NAME" \
+    printf '%s\n' "DB_MODE=$DB_MODE" "DB_NAME=$DB_NAME" "DB_USER=$DB_USER" "DB_PORT=$DB_PORT" "DB_CREATED=$DB_CREATED" \
+        "SERVER_NAME=$SERVER_NAME" \
         "CONSOLE_PORT=$CONSOLE_PORT" "CONSOLE_MODE=$CONSOLE_MODE" "INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$tmp"
     chown root:root "$tmp"
     chmod 600 "$tmp"
@@ -831,6 +912,7 @@ do_install() {
     create_admin_account
     # install.state marks a finished install; without it a re-run starts over instead of offering repair.
     write_state
+    INSTALL_DONE=1
     start_services
     configure_firewall
     print_summary
@@ -986,6 +1068,34 @@ remove_program() { # program, units and service state; config, data, backups and
     rm -f -- "$INSTALL_ROOT/current"
 }
 
+drop_local_database() { # drop_local_database NAME ROLE PORT: only DomainNotice's own database and role
+    local name="$1" role="$2" port="$3" owner super
+    [[ "$name" =~ ^[A-Za-z0-9_]+$ && "$role" =~ ^[A-Za-z0-9_]+$ && "$port" =~ ^[0-9]+$ ]] ||
+        { warn "unexpected database settings in $STATE_FILE; the database was not dropped"; return 0; }
+    case "$name" in postgres|template0|template1) warn "refusing to drop '$name'"; return 0 ;; esac
+    [[ "$role" != postgres ]] || { warn "refusing to drop the role postgres"; return 0; }
+    dn_pgq() { runuser -u postgres -- psql -X -At -q -v ON_ERROR_STOP=1 -p "$port" -d postgres -c "$1"; }
+    if ! super="$(dn_pgq "SELECT rolsuper FROM pg_roles WHERE rolname = '$role'")"; then
+        warn "PostgreSQL on port $port is not reachable; drop the database '$name' and role '$role' yourself"; return 0
+    fi
+    [[ "$super" != t ]] || { warn "the role '$role' is a superuser: it was not created by DomainNotice and is left as it is"; return 0; }
+    owner="$(dn_pgq "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$name'")" ||
+        { warn "could not look up the database '$name'; it was not dropped"; return 0; }
+    if [[ -z "$owner" ]]; then
+        info "The database '$name' does not exist any more"
+    elif [[ "$owner" != "$role" ]]; then
+        warn "the database '$name' is owned by '$owner', not by '$role': it is left as it is"
+        return 0
+    else
+        info "Dropping the database '$name' (PostgreSQL on port $port; other databases are not touched)"
+        dn_pgq "DROP DATABASE \"$name\" WITH (FORCE)" >/dev/null || warn "could not drop the database '$name'"
+    fi
+    if [[ -n "$super" ]]; then
+        dn_pgq "DROP ROLE \"$role\"" >/dev/null ||
+            warn "could not drop the role '$role' (it may own objects in other databases); it is left as it is"
+    fi
+}
+
 do_uninstall() {
     [[ $EUID -eq 0 ]] || die "run as root: sudo $0"
     if [[ $KEEP_DATA -eq 1 ]]; then
@@ -995,10 +1105,13 @@ do_uninstall() {
         return 0
     fi
 
-    local db_mode db_name db_user
+    local db_mode db_name db_user db_port
     db_mode="$(read_state DB_MODE || true)"
     db_name="$(read_state DB_NAME || echo domainnotice)"
     db_user="$(read_state DB_USER || echo domainnotice)"
+    db_port="$(read_state DB_PORT || true)"
+    if [[ -z "$db_port" && -f "$UPDATE_ENV" ]]; then db_port="$(sed -n 's/^PGPORT=//p' "$UPDATE_ENV" | head -n1)"; fi
+    db_port="${db_port:-5432}"
     cat <<EOF
 
   !!  Uninstalling DomainNotice removes EVERYTHING on this server:
@@ -1006,8 +1119,10 @@ do_uninstall() {
       - $INSTALL_ROOT: configuration, the agent-link key (all agents would need reinstalling), data and backups
       - the DATABASE '$db_name' with all announcements, confirmations, answers, computers and history
 EOF
-    if [[ "$db_mode" == local ]]; then echo "        (the local database and its role '$db_user' are dropped)"
-    elif [[ "$db_mode" == existing ]]; then echo "        (all tables in '$db_name' on the external PostgreSQL server are dropped)"; fi
+    if [[ "$db_mode" == local ]]; then
+        echo "        (only the database '$db_name' and its role '$db_user' are dropped; PostgreSQL itself and any other"
+        echo "        databases and roles on it are left as they are)"
+    elif [[ "$db_mode" == existing ]]; then echo "        (all tables in '$db_name' on the external PostgreSQL server are dropped; the database and role stay)"; fi
     echo "      This cannot be undone. Back up the database first if you may need it."
     echo
 
@@ -1034,9 +1149,7 @@ EOF
     info "Removing DomainNotice"
     remove_program
     if [[ "$db_mode" == local ]] && command -v psql >/dev/null 2>&1; then
-        [[ "$db_name" =~ ^[A-Za-z0-9_]+$ && "$db_user" =~ ^[A-Za-z0-9_]+$ ]] || die "unexpected database name in $STATE_FILE"
-        runuser -u postgres -- psql -X -q -c "DROP DATABASE IF EXISTS \"$db_name\"" || warn "could not drop the database"
-        runuser -u postgres -- psql -X -q -c "DROP ROLE IF EXISTS \"$db_user\"" || warn "could not drop the role"
+        drop_local_database "$db_name" "$db_user" "$db_port"
     elif [[ "$db_mode" == existing && -f "$UPDATE_ENV" ]]; then
         # The role owns the database: drop everything DomainNotice created in it.
         ( set -a; while IFS= read -r line; do

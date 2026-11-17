@@ -45,7 +45,8 @@ Other clients get 404. `update.sh` uses it.
 ## Backup and restore
 
 `/opt/domainnotice/bin/backup.sh` (also available as `install.sh --backup` / `--restore`) puts everything in one archive:
-- the **database**, as a `pg_dump`;
+- the **database**: a `pg_dump` of DomainNotice's own database only, made as its role (other databases on a shared
+  PostgreSQL are not included and not touched);
 - the **configuration**: `config/`, including the Console certificate;
 - the **keys and data**: `data/`, including the agent-link key and the Data Protection keys;
 - the **running program**: `releases/<version>/`.
@@ -64,11 +65,12 @@ sudo /opt/domainnotice/bin/backup.sh restore /mnt/nas/domainnotice-backup-1.0.2-
   root can change: it and every folder above it owned by root and not writable by group or others, and not a
   symbolic link. `/tmp`, or a folder owned by another user, is refused. The archive is built in a new private
   folder inside the destination and then renamed into place.
-- **Restore** replaces this server's database, configuration, keys, data and program with the backup's, and makes the
-  backup's version the running one. It first checks the whole archive and refuses it if anything is wrong: paths
-  outside the expected folders, hard links, devices, FIFOs, setuid or setgid entries, links pointing outside the
-  backup, and any link in `config/`. Then it writes a backup of the current state (to `/opt/domainnotice/backups/`),
-  asks you to type `restore` (or `--yes`), starts the server and waits for it to answer.
+- **Restore** replaces the tables in DomainNotice's own database (nothing else on the PostgreSQL server), the
+  configuration, keys, data and program with the backup's, and makes the backup's version the running one. It first
+  checks the whole archive and refuses it if anything is wrong: paths outside the expected folders, hard links,
+  devices, FIFOs, setuid or setgid entries, links pointing outside the backup, and any link in `config/`. Then it
+  writes a backup of the current state (to `/opt/domainnotice/backups/`), asks you to type `restore` (or `--yes`),
+  starts the server and waits for it to answer.
 - **Moving to a new server:** first install DomainNotice there with `install.sh`, from the same version as the backup
   (this installs `update.sh`, `backup.sh` and the units from a verified package), then restore. The new server's
   database connection settings are kept, so a backup from another server works. Point DNS (or `SERVERHOST`) at the

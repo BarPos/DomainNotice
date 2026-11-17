@@ -282,7 +282,7 @@ do_restore() {
         [[ "$line" == *=* ]] || continue
         k="${line%%=*}"; v="${line#*=}"
         case "$k" in
-            DB_MODE|DB_NAME|DB_USER) continue ;;
+            DB_MODE|DB_NAME|DB_USER|DB_PORT|DB_CREATED) continue ;;
             CONSOLE_PORT) [[ "$v" =~ ^[0-9]{1,5}$ ]] || continue ;;
             CONSOLE_MODE) [[ "$v" == http || "$v" == https ]] || continue ;;
             SERVER_NAME) [[ "$v" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || continue ;;
@@ -291,7 +291,7 @@ do_restore() {
         esac
         new_state+="$line"$'\n'
     done <<<"$restored_state"
-    for k in DB_MODE DB_NAME DB_USER CONSOLE_PORT CONSOLE_MODE SERVER_NAME; do
+    for k in DB_MODE DB_NAME DB_USER DB_PORT DB_CREATED CONSOLE_PORT CONSOLE_MODE SERVER_NAME; do
         [[ "$new_state" == *$'\n'"$k="* || "$new_state" == "$k="* ]] && continue
         v="$(printf '%s\n' "$keep_state" | sed -n "s/^$k=//p" | head -n1)"
         [[ -z "$v" ]] || new_state+="$k=$v"$'\n'

@@ -39,7 +39,7 @@ sudo DOMAINNOTICE_ADMIN_PASSWORD='…' ./install.sh --unattended --db=local \
 |---|---|
 | `--package FILE` | A `DomainNotice.Server-<version>-linux-<arch>.tar.gz` (checked against `SHA256SUMS.txt` next to it) |
 | `--version X.Y.Z` | Download that release from GitHub (only once the repository is configured) |
-| `--db=local` | Install PostgreSQL on this machine, with a `domainnotice` role and database listening on localhost |
+| `--db=local` | PostgreSQL on this machine: installed when there is none, shared when there is one (see below). DomainNotice gets its own new role and database. `--db-port` picks the cluster when several run; `--db-name` / `--db-user` set the names (they must be free) |
 | `--db=existing` | Use an existing PostgreSQL: `--db-host`, `--db-port`, `--db-name`, `--db-user`, `--db-sslmode` |
 | `--server-name NAME` | DNS name used by browsers and agents (default: `hostname -f`) |
 | `--console-port N` | Console port (default 443 for `https`, 80 for `http`) |
@@ -48,6 +48,28 @@ sudo DOMAINNOTICE_ADMIN_PASSWORD='…' ./install.sh --unattended --db=local \
 | `--admin-user NAME` | First local admin account |
 | `--open-firewall=yes\|no` | Open the Console port and 5150 when ufw is active |
 | `--secrets-file FILE` / `--secrets-stdin` | `KEY=VALUE` lines: `ADMIN_PASSWORD`, `DB_PASSWORD` (the file must be mode 600) |
+
+### Sharing PostgreSQL with other applications
+
+With `--db=local`, a PostgreSQL that is already installed on the machine (from Ubuntu's or the PostgreSQL project's
+packages) may keep serving other applications. Since 1.0.6 DomainNotice:
+
+- **only adds** a new role and a new database. They are called `domainnotice`, or `domainnotice_2`, `domainnotice_3`, …
+  when a role or database of that name already exists. An existing role or database is never altered or taken over.
+  A name given with `--db-name` / `--db-user` that is taken stops the install.
+- creates the role without superuser, database or role creation rights, and allows only that role (and superusers) to
+  connect to its database.
+- never installs, upgrades, reconfigures (`postgresql.conf`, `pg_hba.conf`) or restarts PostgreSQL, and does not
+  upgrade packages that are already installed. A cluster older than PostgreSQL 16 is refused, not upgraded.
+- uses the cluster on port 5432, or the only running one; with several, choose one with `--db-port`.
+- connects with a password over `127.0.0.1`. If the cluster's `pg_hba.conf` does not allow that, the install stops,
+  removes the role and database it just created, and shows the line to add.
+- when an install fails later on, removes the role and database that run created, and nothing else.
+
+Backups, restores and update rollbacks work only inside DomainNotice's own database (as its role): a backup dumps that
+database, and a restore replaces the tables in it. `--uninstall` drops only that database and that role, after checking
+that the database belongs to the role and the role is not a superuser. PostgreSQL itself, its packages and every other
+database and role stay as they are.
 
 Passwords are **never** accepted as command-line flags, because other users can read the process list. They come
 from `--secrets-file`, `--secrets-stdin`, the environment (`DOMAINNOTICE_ADMIN_PASSWORD`, `DOMAINNOTICE_DB_PASSWORD`)
@@ -141,8 +163,9 @@ Each item also has a flag:
 `--uninstall` deletes the database with all announcements, confirmations, answers and history, and the agent-link key.
 After that, every agent would need reinstalling. The installer warns, offers to write a backup to a file outside
 `/opt/domainnotice` first, and asks you to type `uninstall`. Unattended runs need `--yes`, and can write the backup with
-`--backup-to FILE`. A local database is dropped together with its role. For an existing (external) database, every
-table DomainNotice created is dropped. `--purge` is an alias of `--uninstall`.
+`--backup-to FILE`. A local database is dropped together with its role, and nothing else on that PostgreSQL. For an
+existing (external) database, every table DomainNotice created is dropped; the database and role stay. `--purge` is an
+alias of `--uninstall`.
 
 ## After installing
 
