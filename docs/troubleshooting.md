@@ -98,6 +98,14 @@ password; it also enables the account if it was disabled. `install.sh` is in
   GitHub access, install and update agents with the release MSI directly (see
   [Updates](server/updates.md#agents-update-agent)).
 
+## The Console says "The connection to the server was lost"
+
+The page lost its live connection to the server, usually because the server restarted (an update, or
+`systemctl restart domainnotice`). It retries every few seconds and opens the sign-in page once the server answers
+again; with a valid sign-in that goes straight back to the page. If the message stays, the server is down: check
+`systemctl status domainnotice` and `journalctl -u domainnotice`. Behind a reverse proxy, it must pass WebSockets to
+the Console.
+
 ## A CSV export opens in one column
 
 The field separator follows the Console language: `;` for Polish, `,` otherwise. A spreadsheet set to the other

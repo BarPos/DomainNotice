@@ -12,7 +12,18 @@
 </head>
 <body>
     <Routes @rendermode="PageRenderMode" />
-    <script src="@Assets["_framework/blazor.web.js"]"></script>
+    @* Shown by console.js while the connection to the server is down (for example while the server updates). *@
+    <div id="dn-reconnect" class="dn-reconnect" hidden role="alert" aria-live="assertive"
+         data-down="@T["The connection to the server was lost. Reconnecting…"]"
+         data-restarting="@T["The server is not reachable, for example because it is restarting after an update. This page continues as soon as it is back."]"
+         data-back="@T["The server is back. Opening the sign-in page…"]">
+        <div class="dn-reconnect-box">
+            <div class="dn-reconnect-spinner"></div>
+            <div class="dn-reconnect-text"></div>
+        </div>
+    </div>
+    @* Started by console.js with its own reconnection handler. *@
+    <script src="@Assets["_framework/blazor.web.js"]" autostart="false"></script>
     <script src="@Assets["_content/MudBlazor/MudBlazor.min.js"]"></script>
     <script src="@Assets["_content/DomainNotice.Console/console.js"]"></script>
 </body>

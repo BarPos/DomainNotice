@@ -3,6 +3,7 @@
 @attribute [AllowAnonymous]
 @attribute [ExcludeFromInteractiveRouting]
 @inject IAdminSignInService SignIn
+@inject NavigationManager Nav
 @* Static form; POST goes to the /account/login endpoint, which sets the cookie. One generic error: no user enumeration. *@
 
 <PageTitle>@T["Sign in"] · DomainNotice</PageTitle>
@@ -55,6 +56,7 @@ else
 }
 
 @code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
     [SupplyParameterFromQuery] public string? Error { get; set; }
     [SupplyParameterFromQuery] public string? Source { get; set; }
     [SupplyParameterFromQuery] public string? Created { get; set; }
@@ -72,5 +74,8 @@ else
         _local = SignIn.LocalSignInEnabled;
         _setupAllowed = await SignIn.IsFirstRunSetupAllowedAsync();
         ReturnUrl = Endpoints.ConsoleEndpoints.SafeReturnUrl(ReturnUrl);
+        // Still signed in (for example after the page reconnected to a restarted server): go straight on.
+        if (Error is null && HttpContext?.User is { } user && DomainNotice.Console.Auth.ConsoleAuth.IsConsoleUser(user))
+            Nav.NavigateTo(ReturnUrl, forceLoad: true);
     }
 }

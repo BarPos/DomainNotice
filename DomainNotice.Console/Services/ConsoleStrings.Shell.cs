@@ -23,6 +23,11 @@ internal static partial class ConsoleStrings
         d["Settings"] = "Ustawienia";
         d["Audit log"] = "Dziennik audytu";
         d["A newer release is available"] = "Dostępna jest nowsza wersja";
+        // Reconnection overlay (App.razor, console.js)
+        d["The connection to the server was lost. Reconnecting…"] = "Utracono połączenie z serwerem. Ponowne łączenie…";
+        d["The server is not reachable, for example because it is restarting after an update. This page continues as soon as it is back."] =
+            "Serwer jest niedostępny, na przykład dlatego, że uruchamia się ponownie po aktualizacji. Strona będzie kontynuowana, gdy tylko serwer wróci.";
+        d["The server is back. Opening the sign-in page…"] = "Serwer znowu działa. Otwieranie strony logowania…";
         d["Update"] = "Aktualizacja";
         d["You do not have access to this page."] = "Nie masz dostępu do tej strony.";
 

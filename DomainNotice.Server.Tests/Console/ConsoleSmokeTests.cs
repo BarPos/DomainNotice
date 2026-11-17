@@ -119,14 +119,29 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
         Assert.Contains("secure", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
 
+        // Signed in: the sign-in page goes straight on (pages reconnecting after a server restart open it), and only to
+        // a local path.
+        static string SameHostPath(Uri location)
+        {
+            if (!location.IsAbsoluteUri) return location.OriginalString;
+            Assert.Equal("localhost", location.Host); // Blazor writes the redirect as an absolute URL to this server
+            return location.PathAndQuery;
+        }
+        var forward = await client.GetAsync("/account/login?returnUrl=%2Fcomputers", Ct);
+        Assert.Equal(HttpStatusCode.Redirect, forward.StatusCode);
+        Assert.Equal("/computers", SameHostPath(forward.Headers.Location!));
+        forward = await client.GetAsync("/account/login?returnUrl=%2F%09%2Fevil.example", Ct);
+        Assert.Equal("/", SameHostPath(forward.Headers.Location!));
+
         // Open redirect: browsers drop tab/CR/LF in a URL, so "/<TAB>/evil.example" would land on //evil.example.
+        // (?error=1 shows the form even when signed in.)
         foreach (var (returnUrl, expected) in new[]
                  {
                      ("/\t/evil.example/x", "/"), ("/\n/evil.example", "/"), ("/\r\n/evil.example", "/"), ("/\\evil.example", "/"),
                      ("/x\\..\\\\evil.example", "/"), ("//evil.example", "/"), ("/ok?x=1", "/ok?x=1"),
                  })
         {
-            var again = await client.PostAsync("/account/login", Form(await client.GetStringAsync("/account/login", Ct),
+            var again = await client.PostAsync("/account/login", Form(await client.GetStringAsync("/account/login?error=1", Ct),
                 ("source", "local"), ("username", "admin"), ("password", "Passw0rd!x"), ("returnUrl", returnUrl)), Ct);
             Assert.Equal(HttpStatusCode.Redirect, again.StatusCode);
             Assert.Equal(expected, again.Headers.Location!.OriginalString);

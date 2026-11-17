@@ -345,9 +345,16 @@ public class KerberosProofTests(PostgresFixture pg)
         Assert.True((await ProveAsync(old)).Linked);
         await old.DisposeAsync();
         await TestAgentServer.WaitUntilAsync(() => !hub.IsOnline(oldId));
-        await using (var ctx = db.CreateContext())
-            await ctx.Computers.Where(c => c.Id == oldId)
-                .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastSeenAtUtc, DateTime.UtcNow.AddDays(-8)), Ct);
+        // The disconnect handler writes LastSeenAtUtc too, possibly after the hub already shows the PC offline: backdate
+        // until the value sticks.
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            await using (var ctx = db.CreateContext())
+                await ctx.Computers.Where(c => c.Id == oldId)
+                    .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastSeenAtUtc, DateTime.UtcNow.AddDays(-8)), Ct);
+            await Task.Delay(100, Ct);
+            if ((await AgentLinkTestHelpers.GetComputerAsync(db, oldId)).LastSeenAtUtc < DateTime.UtcNow.AddDays(-7)) break;
+        }
 
         await using var fresh = await server.ConnectAsync();
         var freshId = (await fresh.EnrollAsync(computerName: "PC-1")).ComputerId!.Value;

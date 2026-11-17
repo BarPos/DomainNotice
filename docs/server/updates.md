@@ -61,6 +61,12 @@ Releases are not signed yet. `SHA256SUMS.txt` catches corrupted downloads, not a
    and starts the old version.
 5. The result appears in the Console. The last 3 releases are kept.
 
+While the server restarts, open Console pages show *The connection to the server was lost* and keep trying. When the
+server is back they continue by themselves: the sign-in page opens, and goes straight back to the page if the sign-in
+is still valid (since 1.0.6; before, pages could stay on "Reconnecting" until reloaded by hand).
+
+The **About and updates** tab shows a **!** next to its title when a newer release is available.
+
 Downgrades are not offered.
 
 ### Refreshing update.sh, backup.sh and the units

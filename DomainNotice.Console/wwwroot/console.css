@@ -152,3 +152,19 @@ body { margin: 0; }
 .dn-account-foot { margin-top: 16px; font-size: 0.8rem; color: #5b6670; text-align: center; }
 .dn-account-foot a { color: #1e6fd9; }
 .dn-grid .mud-simple-table { overflow-x: auto; }
+
+/* Tab badges (the "!" on About and updates): inline after the label. On the tab's corner the tab clipped them. */
+.mud-tab .mud-tab-badge { position: static; display: inline-flex; align-items: center; margin-left: 8px; }
+.mud-tab .mud-tab-badge .mud-badge-wrapper { position: static; display: inline-flex; }
+.mud-tab .mud-tab-badge .mud-badge { position: static; inset: auto; transform: none; }
+
+/* Reconnection overlay (App.razor, console.js). */
+.dn-reconnect { position: fixed; inset: 0; z-index: 3000; display: flex; align-items: center; justify-content: center;
+                background: rgba(0, 0, 0, 0.35); }
+.dn-reconnect[hidden] { display: none; }
+.dn-reconnect-box { display: flex; align-items: center; gap: 16px; max-width: 520px; margin: 16px; padding: 20px 24px;
+                    background: #ffffff; color: rgba(0, 0, 0, 0.87); border-radius: 8px;
+                    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); font-family: Roboto, Helvetica, Arial, sans-serif; }
+.dn-reconnect-spinner { flex: none; width: 28px; height: 28px; border-radius: 50%; border: 3px solid #e0e0e0;
+                        border-top-color: #1e88e5; animation: dn-spin 0.9s linear infinite; }
+@keyframes dn-spin { to { transform: rotate(360deg); } }
