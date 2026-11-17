@@ -52,7 +52,7 @@ sudo DOMAINNOTICE_ADMIN_PASSWORD='…' ./install.sh --unattended --db=local \
 ### Sharing PostgreSQL with other applications
 
 With `--db=local`, a PostgreSQL that is already installed on the machine (from Ubuntu's or the PostgreSQL project's
-packages) may keep serving other applications. Since 1.0.6 DomainNotice:
+packages) may keep serving other applications. Since 1.0.7 DomainNotice:
 
 - **only adds** a new role and a new database. They are called `domainnotice`, or `domainnotice_2`, `domainnotice_3`, …
   when a role or database of that name already exists. An existing role or database is never altered or taken over.
