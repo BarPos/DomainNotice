@@ -38,6 +38,16 @@ public static class LdapSecurityPolicy
         return null;
     }
 
+    /// <summary>
+    /// A warning when Directory:Security is not one of the known values (e.g. "3"). Such a value is not refused (by
+    /// decision), but the connection then uses neither LDAPS nor StartTLS: plain LDAP, also outside Development.
+    /// </summary>
+    public static string? UnknownSecurityWarning(DirectoryOptions o) =>
+        Enum.IsDefined(o.Security)
+            ? null
+            : $"Directory:Security has the unknown value \"{o.Security}\": plain LDAP (no LDAPS, no StartTLS) is used, so " +
+              "passwords cross the network unencrypted. Set Directory:Security to Ldaps or StartTls.";
+
     /// <summary>Connection settings plus the service account (needed by the sync, not by domain sign-in).</summary>
     public static string? ValidateServiceAccount(DirectoryOptions o, bool isDevelopment)
     {

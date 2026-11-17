@@ -48,6 +48,12 @@ public sealed record UserFacts(
 {
     public string UserKey => UserKeys.Normalize(UserName);
 
+    /// <summary>
+    /// NetBIOS name of the one supported domain, when known (setting Directory.NetBiosName). With it, typed user names
+    /// match only accounts of that domain, never a local account such as PC01\alice. Null = any prefix (old rule).
+    /// </summary>
+    public string? NetBiosDomain { get; init; }
+
     public static UserFacts NameOnly(string userName) => new(userName, new HashSet<Guid>(), [], new HashSet<Guid>());
 }
 
@@ -140,7 +146,7 @@ public static class Eligibility
             case TargetKind.User:
                 if (target.DirectoryObjectGuid is { } userGuid)
                     return user.ObjectGuids.Contains(userGuid);
-                return !string.IsNullOrWhiteSpace(target.Value) && IdentityMatch.UserMatches(target.Value, user.UserName);
+                return !string.IsNullOrWhiteSpace(target.Value) && IdentityMatch.UserMatches(target.Value, user.UserName, user.NetBiosDomain);
 
             case TargetKind.Computer:
                 if (target.ComputerId is { } computerId && computerId == computer.Id)
@@ -170,12 +176,12 @@ public static class Eligibility
     public static bool IsLinked(ComputerFacts computer) =>
         computer.LinkState is AdLinkState.MatchedByName or AdLinkState.Proven && computer.DirectoryObjectGuid is not null;
 
-    /// <summary>True when <paramref name="dnLower"/> is the OU itself or inside its subtree. Both lowercased.</summary>
-    public static bool IsInSubtree(string dnLower, string ouDnLower)
-    {
-        if (string.IsNullOrEmpty(dnLower) || string.IsNullOrEmpty(ouDnLower)) return false;
-        return dnLower == ouDnLower || dnLower.EndsWith("," + ouDnLower, StringComparison.Ordinal);
-    }
+    /// <summary>
+    /// True when <paramref name="dnLower"/> is the OU itself or inside its subtree. Both lowercased. Escape-aware: an
+    /// escaped comma inside a name ("cn=x\,ou=finance,...") is not an RDN boundary.
+    /// </summary>
+    public static bool IsInSubtree(string dnLower, string ouDnLower) =>
+        DomainNotice.Server.Directory.DistinguishedNames.IsSameOrBelowLower(dnLower, ouDnLower);
 
     /// <summary>
     /// Picks the first due announcement in order (StartUtc, then CreatedAtUtc — the caller passes them ordered).
@@ -207,15 +213,35 @@ public static class IdentityMatch
         return trimmed;
     }
 
-    /// <summary>Case-insensitive; a bare "alice" also matches "CORP\alice" and "alice@corp".</summary>
-    public static bool UserMatches(string target, string reported)
+    /// <summary>
+    /// Case-insensitive; a bare "alice" also matches "CORP\alice" and "alice@corp".
+    /// <para>With <paramref name="netBiosDomain"/> known (one domain is supported), a reported <c>X\name</c> matches only
+    /// when X is that domain, so a local account such as <c>PC01\alice</c> never matches a target typed as <c>alice</c>
+    /// or <c>CORP\alice</c>; a bare target matches only <c>DOMAIN\alice</c> or a UPN <c>alice@…</c>.</para>
+    /// </summary>
+    public static bool UserMatches(string target, string reported, string? netBiosDomain = null)
     {
         target = target.Trim();
         reported = reported.Trim();
         if (target.Length == 0 || reported.Length == 0) return false;
+        if (!string.IsNullOrWhiteSpace(netBiosDomain) && !IsDomainAccount(reported, netBiosDomain)) return false;
         if (string.Equals(target, reported, StringComparison.OrdinalIgnoreCase)) return true;
         if (!target.Contains('\\') && !target.Contains('@'))
             return string.Equals(target, SamAccountName(reported), StringComparison.OrdinalIgnoreCase);
         return false;
+    }
+
+    /// <summary>
+    /// True when the reported name is an account of the domain <paramref name="netBiosDomain"/>: <c>DOMAIN\name</c>
+    /// with that prefix, or a UPN <c>name@…</c>. A local account (<c>PC01\alice</c>) or a bare name is not.
+    /// </summary>
+    public static bool IsDomainAccount(string reported, string netBiosDomain)
+    {
+        var r = reported.Trim();
+        var slash = r.LastIndexOf('\\');
+        if (slash >= 0)
+            return slash < r.Length - 1 && string.Equals(r[..slash].Trim(), netBiosDomain.Trim(), StringComparison.OrdinalIgnoreCase);
+        var at = r.IndexOf('@');
+        return at > 0 && at < r.Length - 1;
     }
 }

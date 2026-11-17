@@ -69,8 +69,9 @@ public class LdapHelperTests
 
     [Theory]
     [InlineData(@"EXAMPLE\JDoe", "jdoe")]
-    [InlineData("JDoe@example.local", "jdoe")]
+    [InlineData(@"OTHER\jdoe", "jdoe")]
     [InlineData(" jdoe ", "jdoe")]
+    [InlineData("JDoe@example.local", "upn:jdoe@example.local")] // a UPN keeps its own key
     public void Rate_limit_key_is_shared_across_spellings(string user, string expected) =>
         Assert.Equal(expected, BindNames.RateLimitKey(user));
 
@@ -124,12 +125,83 @@ public class LdapHelperTests
     }
 
     [Fact]
-    public void Group_pick_prefers_unique_sam_and_refuses_ambiguous_cn()
+    public void Group_pick_needs_exactly_one_group_matching_sam_or_cn()
     {
-        Assert.Equal("CN=a,OU=1", DomainRoles.PickGroupDn(["CN=a,OU=1"], ["CN=a,OU=1", "CN=a,OU=2"]));
-        Assert.Equal("CN=a,OU=2", DomainRoles.PickGroupDn([], ["CN=a,OU=2"]));
-        Assert.Null(DomainRoles.PickGroupDn([], ["CN=a,OU=1", "CN=a,OU=2"]));
-        Assert.Null(DomainRoles.PickGroupDn([], []));
+        Assert.Equal("CN=a,OU=1", DomainRoles.PickGroupDn(["CN=a,OU=1"]));
+        // The same group returned twice (spelling differs) is still one group.
+        Assert.Equal("CN=a,OU=1", DomainRoles.PickGroupDn(["CN=a,OU=1", "cn=A, ou=1"]));
+        // A look-alike group (its sAMAccountName equals the configured cn of the real one) makes the name ambiguous:
+        // it grants nothing instead of taking over.
+        Assert.Null(DomainRoles.PickGroupDn(["CN=DomainNotice Admins,OU=Groups", "CN=Fake,OU=Delegated"]));
+        Assert.Null(DomainRoles.PickGroupDn([]));
+        Assert.Equal("(&(objectClass=group)(|(cn=DomainNotice Admins)(sAMAccountName=DomainNotice Admins)))",
+            LdapFilters.GroupByName(" DomainNotice Admins "));
+    }
+
+    [Theory]
+    [InlineData(@"CORP\alice", "CORP", null, "alice")]
+    [InlineData(@"corp\Alice", "CORP", null, "Alice")]
+    [InlineData(@"CORP\alice", "CORP", @"corp\alice", "alice")]
+    [InlineData(@"CORP\alice", "CORP", "alice@corp.test", "alice")]
+    [InlineData(@"CHILD\Administrator", "CORP", "Administrator", null)]   // another domain's account bound
+    [InlineData(null, "CORP", @"OTHER\jdoe", null)]                     // typed prefix of another domain
+    [InlineData(@"CORP\jdoe", "CORP", @"OTHER\jdoe", null)]
+    [InlineData(null, "CORP", "jdoe", null)]                             // no "Who am I?" answer: fail closed
+    [InlineData(@"CORP\alice", null, "alice", null)]                     // NetBIOS name unknown: fail closed
+    [InlineData("alice", "CORP", "alice", null)]                         // answer without a domain
+    [InlineData(@"A\B\c", "A", "c", null)]
+    public void Identity_check_allows_only_the_configured_domain(string? whoAmI, string? netBios, string? typed, string? expectedSam)
+    {
+        var (sam, refusal) = DomainRoles.CheckIdentity(whoAmI, netBios, typed ?? "x");
+        Assert.Equal(expectedSam, sam);
+        Assert.Equal(expectedSam is null, refusal is not null);
+    }
+
+    [Theory]
+    [InlineData("DC=corp,DC=test", "DC=corp,DC=test")]
+    [InlineData("OU=Staff, OU=Sales,DC=corp,DC=test", "DC=corp,DC=test")]
+    [InlineData("OU=Staff,DC=child,DC=corp,DC=test", "DC=child,DC=corp,DC=test")]
+    [InlineData("OU=Staff,O=Org", "")]
+    public void Domain_dn_of_base_dn(string baseDn, string expected) =>
+        Assert.Equal(expected, DomainNetBiosName.DomainDn(baseDn));
+
+    [Fact]
+    public void NetBios_name_comes_from_the_exact_crossRef()
+    {
+        (string?, string?)[] refs =
+        [
+            ("DC=corp,DC=test", "CORP"),
+            ("DC=child,DC=corp,DC=test", "CHILD"),
+            ("CN=Configuration,DC=corp,DC=test", null),
+        ];
+        Assert.Equal("CORP", DomainNetBiosName.Pick(refs, "dc=corp, dc=test"));
+        Assert.Equal("CHILD", DomainNetBiosName.Pick(refs, "DC=child,DC=corp,DC=test"));
+        Assert.Null(DomainNetBiosName.Pick(refs, "DC=test")); // never a suffix match
+        Assert.Null(DomainNetBiosName.Pick(refs, ""));
+        Assert.Null(DomainNetBiosName.Pick([("DC=corp,DC=test", "CORP"), ("DC=corp,DC=test", "OTHER")], "DC=corp,DC=test"));
+    }
+
+    [Theory]
+    [InlineData("alice", true)]
+    [InlineData(@"CORP\alice", true)]
+    [InlineData("alice@corp.test", true)]
+    [InlineData("CN=alice,OU=Sales,DC=corp,DC=test", false)]
+    [InlineData("cn=Alice, ou=Sales, dc=corp, dc=test", false)]
+    [InlineData("a=b", false)]
+    [InlineData(@"\alice", false)]
+    [InlineData(@"CORP\", false)]
+    [InlineData(@"A\B\c", false)]
+    [InlineData("", false)]
+    public void Sign_in_names_refuse_dns(string name, bool accepted) =>
+        Assert.Equal(accepted, BindNames.IsAcceptedSignInName(name));
+
+    [Fact]
+    public void Unknown_security_value_is_warned_about_but_not_refused()
+    {
+        var o = new DirectoryOptions { Hosts = ["dc1"], BaseDn = "DC=x,DC=y", Security = (DirectorySecurity)3 };
+        Assert.Null(LdapSecurityPolicy.ValidateConnection(o, isDevelopment: false));
+        Assert.Contains("plain LDAP", LdapSecurityPolicy.UnknownSecurityWarning(o));
+        Assert.Null(LdapSecurityPolicy.UnknownSecurityWarning(new DirectoryOptions { Security = DirectorySecurity.StartTls }));
     }
 
     [Fact]

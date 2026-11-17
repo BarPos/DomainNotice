@@ -89,6 +89,31 @@ public class EligibilityTests
     public void User_target_by_name_without_directory(string target, string reported, bool expected) =>
         Assert.Equal(expected, Due(Rule(targets: new TargetRule(TargetKind.User, Value: target)), user: UserFacts.NameOnly(reported)));
 
+    [Theory]
+    // One domain (NetBIOS CORP): a local account with the same name is not the domain user.
+    [InlineData("alice", @"PC01\alice", false)]
+    [InlineData(@"CORP\alice", @"PC01\alice", false)]
+    [InlineData(@"PC01\alice", @"PC01\alice", false)]
+    [InlineData("alice", @"corp\Alice", true)]
+    [InlineData(@"CORP\alice", @"CORP\alice", true)]
+    [InlineData("alice", "alice@corp.example", true)]
+    [InlineData("alice@corp.example", "alice@corp.example", true)]
+    [InlineData("alice", "alice", false)]                 // a bare reported name is no domain account
+    [InlineData(@"OTHER\alice", @"CORP\alice", false)]
+    public void User_target_by_name_with_known_domain(string target, string reported, bool expected) =>
+        Assert.Equal(expected, Due(Rule(targets: new TargetRule(TargetKind.User, Value: target)),
+            user: UserFacts.NameOnly(reported) with { NetBiosDomain = "CORP" }));
+
+    [Theory]
+    [InlineData(@"CORP\alice", true)]
+    [InlineData(@"corp\alice", true)]
+    [InlineData("alice@corp.example", true)]
+    [InlineData(@"PC01\alice", false)]
+    [InlineData("alice", false)]
+    [InlineData(@"CORP\", false)]
+    public void Domain_account_detection(string reported, bool expected) =>
+        Assert.Equal(expected, IdentityMatch.IsDomainAccount(reported, "CORP"));
+
     [Fact]
     public void Computer_target_by_enrolled_id() =>
         Assert.True(Due(Rule(targets: new TargetRule(TargetKind.Computer, ComputerId: ComputerId)), computer: Computer(AdLinkState.None)));
@@ -121,6 +146,30 @@ public class EligibilityTests
 
     [Fact]
     public void Ou_equal_to_object_dn_matches() => Assert.True(Eligibility.IsInSubtree(UserDn, UserDn));
+
+    [Theory]
+    // An escaped comma is part of the CN, not an RDN boundary.
+    [InlineData(@"cn=x\,ou=finance,ou=workstations,dc=corp,dc=example", "ou=finance,ou=workstations,dc=corp,dc=example", false)]
+    [InlineData(@"cn=x\\\,ou=finance,ou=workstations,dc=corp,dc=example", "ou=finance,ou=workstations,dc=corp,dc=example", false)]
+    // An escaped backslash before a real comma: the comma is a boundary.
+    [InlineData(@"cn=x\\,ou=finance,ou=workstations,dc=corp,dc=example", "ou=finance,ou=workstations,dc=corp,dc=example", true)]
+    // The escaped name is still inside the OU it really is in.
+    [InlineData(@"cn=x\,ou=finance,ou=workstations,dc=corp,dc=example", "ou=workstations,dc=corp,dc=example", true)]
+    // A hex-escaped comma (\2c) is no boundary either.
+    [InlineData(@"cn=x\2cou=finance,ou=workstations,dc=corp,dc=example", "ou=finance,ou=workstations,dc=corp,dc=example", false)]
+    public void Ou_subtree_check_honours_escapes(string dn, string ou, bool expected)
+    {
+        Assert.Equal(expected, Eligibility.IsInSubtree(dn, ou));
+        Assert.Equal(expected, DomainNotice.Server.Directory.DistinguishedNames.IsUnderBase(dn, ou));
+    }
+
+    [Fact]
+    public void Ou_target_is_not_fooled_by_an_escaped_comma_in_the_computer_name()
+    {
+        var c = Computer() with { DistinguishedNameLower = @"cn=x\,ou=finance,ou=workstations,ou=it,dc=corp,dc=example" };
+        var finance = new TargetRule(TargetKind.OrganizationalUnit, Guid.NewGuid(), OrganizationalUnitDnLower: "ou=finance,ou=workstations,ou=it,dc=corp,dc=example");
+        Assert.False(Due(Rule(targets: finance), computer: c, user: User() with { DistinguishedNamesLower = [] }));
+    }
 
     [Fact]
     public void Awaiting_approval_default_policy_gets_everyone_and_user_only()

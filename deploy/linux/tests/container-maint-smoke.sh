@@ -73,6 +73,28 @@ check "http: install.state has the mode"    grep -q '^CONSOLE_MODE=http$' $R/con
 check "http: sign-in over plain HTTP works" [ "$(sign_in admin "$DOMAINNOTICE_ADMIN_PASSWORD")" == "$B/" ]
 check "http: summary shows http URL"        grep -q 'Console: *http://dn.example.test:8080/' /tmp/install.log
 check "backup.sh installed root-owned"      bash -c "[ \"\$(stat -c '%a %U' $R/bin/backup.sh)\" == '755 root' ]"
+check "package has this backup.sh (rebuild it otherwise)" cmp -s /src/backup.sh $R/bin/backup.sh
+check "package has this update.sh"          cmp -s /src/update.sh $R/bin/update.sh
+check "backups folder is root-only"         bash -c "[ \"\$(stat -c '%a %U:%G' $R/backups)\" == '700 root:root' ]"
+
+# ---- backup into the default folder after the service user planted links there (install from before 1.0.5,
+#      when backups/ was the service user's): root must not write, chown or chmod through them.
+echo victim >/etc/dn-victim; chmod 644 /etc/dn-victim
+chown domainnotice:domainnotice $R/backups
+now=$(date -u +%s)
+for i in $(seq 0 90); do
+    name="domainnotice-backup-$(basename "$(readlink -f $R/current)")-$(hostname -s)-$(date -u -d "@$((now + i))" +%Y%m%dT%H%M%SZ).tar.gz"
+    runuser -u domainnotice -- ln -s /etc/dn-victim "$R/backups/$name.partial"
+done
+bash /src/install.sh --backup >/tmp/backup0.log 2>&1
+check "planted links: backup written"       bash -c "ls $R/backups/domainnotice-backup-*.tar.gz >/dev/null 2>&1 && [ -f \"\$(ls $R/backups/domainnotice-backup-*.tar.gz | head -n1)\" ]"
+check "planted links: target untouched"     bash -c "[ \"\$(cat /etc/dn-victim)\" == victim ] && [ \"\$(stat -c '%a %U' /etc/dn-victim)\" == '644 root' ]"
+check "planted links: still links"          bash -c "[ -L \"\$(ls $R/backups/*.partial | head -n1)\" ]"
+check "planted links: backups taken over"   bash -c "[ \"\$(stat -c '%a %U:%G' $R/backups)\" == '700 root:root' ]"
+mkdir -p /srv/dn-shared && chown domainnotice /srv/dn-shared
+check "backup refused into a folder another user owns" bash -c "! bash /src/install.sh --backup --output /srv/dn-shared >/dev/null 2>&1 && [ -z \"\$(ls -A /srv/dn-shared)\" ]"
+check "backup refused into a world-writable folder" bash -c "! bash /src/install.sh --backup --output /tmp >/dev/null 2>&1"
+check "backup refused onto a link"           bash -c "ln -sfn /etc /root/dn-link && ! bash /src/install.sh --backup --output /root/dn-link >/dev/null 2>&1"
 
 # ---- backup
 psql_dn "insert into \"AuditLog\" (\"AtUtc\",\"Actor\",\"Action\") values (now(),'smoke','marker-before-backup')" >/dev/null
@@ -80,6 +102,8 @@ fp_before="$(sha256sum $R/data/keys/agent-link.pfx | cut -c1-64)"
 bash /src/install.sh --backup --output /root/backups >/tmp/backup.log 2>&1
 file="$(ls /root/backups/domainnotice-backup-*.tar.gz 2>/dev/null | head -n1)"
 check "backup: archive written"             [ -n "$file" ]
+[ -n "$file" ] || sed 's/^/     /' /tmp/backup.log
+grep -h 'changed while\|ERROR' /tmp/backup0.log /tmp/backup.log | sed 's/^/     /'
 check "backup: mode 600, owned by root"     bash -c "[ \"\$(stat -c '%a %U' '$file')\" == '600 root' ]"
 check "backup: has manifest, db dump, files" bash -c "tar -tzf '$file' | sort | tr '\n' ' ' | grep -q 'database.dump files.tar manifest.txt'"
 check "backup: files include key and program" bash -c "tar -xzOf '$file' files.tar | tar -t | grep -q 'opt/domainnotice/data/keys/agent-link.pfx' && tar -xzOf '$file' files.tar | tar -t | grep -q 'opt/domainnotice/releases/.*/DomainNotice.Server$'"
@@ -97,6 +121,47 @@ check "restore: key owned by service user"  bash -c "[ \"\$(stat -c '%a %U' $R/d
 check "restore: safety backup was made"     bash -c "ls $R/backups/domainnotice-backup-*.tar.gz >/dev/null 2>&1"
 check "restore: server answers again"       wait_up
 check "restore: unattended needs --yes"     bash -c "! bash /src/install.sh --restore '$file' --unattended >/dev/null 2>&1"
+
+# ---- tampered archives: bin/ and units from a backup are never installed; setuid entries are refused
+tamper() { # tamper OUT MEMBER_DIR: appends the files and links under MEMBER_DIR to files.tar of $file
+    local t; t="$(mktemp -d)"
+    tar -xzf "$file" -C "$t"
+    (cd "$2" && find . ! -type d | sed 's|^\./||') >"$t/list"
+    tar --append --file="$t/files.tar" -C "$2" -T "$t/list"
+    tar -czf "$1" -C "$t" manifest.txt database.dump files.tar
+    rm -rf "$t"
+}
+bin_sum="$(sha256sum $R/bin/update.sh | cut -c1-64)"
+unit_sum="$(sha256sum /etc/systemd/system/domainnotice-update.service | cut -c1-64)"
+x="$(mktemp -d)"
+mkdir -p "$x/opt/domainnotice/bin" "$x/etc/systemd/system"
+printf '#!/bin/sh\ntouch /tmp/dn-pwned\n' >"$x/opt/domainnotice/bin/update.sh"; chmod 755 "$x/opt/domainnotice/bin/update.sh"
+printf '[Service]\nExecStart=/tmp/dn-evil\n' >"$x/etc/systemd/system/domainnotice-update.service"
+tamper /root/tampered-bin.tar.gz "$x"
+bash /src/install.sh --restore /root/tampered-bin.tar.gz --unattended --yes >/tmp/restore-bin.log 2>&1
+check "tampered bin/: restore finished"     grep -q 'Restored' /tmp/restore-bin.log
+check "tampered bin/: update.sh kept"       [ "$(sha256sum $R/bin/update.sh | cut -c1-64)" == "$bin_sum" ]
+check "tampered bin/: unit kept"            [ "$(sha256sum /etc/systemd/system/domainnotice-update.service | cut -c1-64)" == "$unit_sum" ]
+check "tampered bin/: server answers"       wait_up
+x="$(mktemp -d)"
+mkdir -p "$x/opt/domainnotice/data"
+install -m 4755 /bin/true "$x/opt/domainnotice/data/dn-suid"
+tamper /root/tampered-suid.tar.gz "$x"
+bash /src/install.sh --restore /root/tampered-suid.tar.gz --unattended --yes >/tmp/restore-suid.log 2>&1
+check "setuid entry: restore refused"       bash -c "grep -q 'setuid' /tmp/restore-suid.log && [ ! -e $R/data/dn-suid ]"
+x="$(mktemp -d)"
+mkdir -p "$x/opt/domainnotice/config"
+ln -s appsettings.Production.json "$x/opt/domainnotice/config/install.state.new"
+tamper /root/tampered-link.tar.gz "$x"
+bash /src/install.sh --restore /root/tampered-link.tar.gz --unattended --yes >/tmp/restore-link.log 2>&1
+check "link in config/: restore refused"    bash -c "grep -q 'links or special files in config/' /tmp/restore-link.log && [ ! -e $R/config/install.state.new ]"
+x="$(mktemp -d)"
+mkdir -p "$x/opt/domainnotice/data"
+ln -s /etc/dn-victim "$x/opt/domainnotice/data/escape"
+tamper /root/tampered-abs.tar.gz "$x"
+bash /src/install.sh --restore /root/tampered-abs.tar.gz --unattended --yes >/tmp/restore-abs.log 2>&1
+check "absolute link in data/: restore refused" bash -c "grep -q 'absolute target' /tmp/restore-abs.log && [ ! -L $R/data/escape ]"
+check "server still answers after refusals" wait_up
 
 # ---- reset password
 DOMAINNOTICE_ADMIN_PASSWORD='Second-Passw0rd-456' bash /src/install.sh --reset-password admin --unattended >/tmp/reset.log 2>&1

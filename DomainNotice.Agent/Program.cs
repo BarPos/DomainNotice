@@ -15,7 +15,9 @@ if (args.Any(a => a.Equals("--reenrol", StringComparison.OrdinalIgnoreCase)))
     return ReenrolCommand.Run();
 
 var paths = AgentPaths.Default;
-var folderError = paths.EnsureCreatedAndSecured();
+// Secures %ProgramData%\DomainNotice before anything uses it. On failure, updates and file logging stay off
+// (paths.InsecureReason) and the Event Log gets the reason.
+var folders = paths.EnsureCreatedAndSecured();
 
 var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 {
@@ -39,9 +41,9 @@ builder.Services.Configure<HostOptions>(options =>
     options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost;
 });
 
-// Logs: rolling files in %ProgramData%\DomainNotice\logs plus the Windows Event Log (warnings and errors, and the
-// start/stop/connection events of the ServiceEvents category).
-builder.Logging.AddProvider(new RollingFileLoggerProvider(paths.Logs));
+// Logs: rolling files in %ProgramData%\DomainNotice\logs (only when the folder is secured) plus the Windows Event Log
+// (warnings and errors, and the start/stop/connection events of the ServiceEvents category).
+if (folders.Error is null) builder.Logging.AddProvider(new RollingFileLoggerProvider(paths));
 builder.Logging.SetMinimumLevel(LogLevel.Information);
 builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Information);
@@ -80,7 +82,9 @@ var events = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger(Age
 var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 lifetime.ApplicationStarted.Register(() => events.LogInformation("DomainNotice Agent {Version} started.", AppVersion.Current));
 lifetime.ApplicationStopping.Register(() => events.LogInformation("DomainNotice Agent {Version} stopping.", AppVersion.Current));
-if (folderError is not null) events.LogError("{Error}", folderError);
+foreach (var repair in folders.Repairs) events.LogWarning("Data folder: {Repair}", repair);
+if (folders.Error is not null)
+    events.LogError("{Error} Agent updates and file logging are off until the folder can be secured (fix it, then restart the service).", folders.Error);
 if (recoveryError is not null) events.LogWarning("Could not set the service recovery actions: {Error}", recoveryError);
 
 try

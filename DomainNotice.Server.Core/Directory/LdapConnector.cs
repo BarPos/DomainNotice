@@ -66,6 +66,7 @@ internal sealed class LdapConnector : IDisposable
     private readonly SemaphoreSlim _blockingGate = new(8, 8);
     private readonly ConcurrentQueue<(LdapLease Lease, DateTime IdleSinceUtc)> _idle = new();
     private int _generation;
+    private static int _unknownSecurityWarned;
     private X509Certificate2Collection? _trusted;
 
     public LdapConnector(IOptions<DirectoryOptions> options, IHostEnvironment env, BindPasswordProvider passwords,
@@ -141,6 +142,8 @@ internal sealed class LdapConnector : IDisposable
     private async Task<(LdapConnection Connection, string Host)> ConnectAndBindAsync(string bindName, string password, CancellationToken ct)
     {
         LdapNativeEnvironment.EnsureApplied(O, IsDevelopment, Path.Combine(Path.GetTempPath(), "domainnotice"), _logger);
+        if (LdapSecurityPolicy.UnknownSecurityWarning(O) is { } warning && Interlocked.Exchange(ref _unknownSecurityWarned, 1) == 0)
+            _logger.LogWarning("{Warning}", warning);
         var defaultPort = LdapSecurityPolicy.EffectivePort(O);
         var failures = new List<string>();
         foreach (var entry in O.Hosts)

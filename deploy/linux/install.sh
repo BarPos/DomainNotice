@@ -16,6 +16,8 @@
 #                         (checked against SHA256SUMS.txt next to it when present)
 #   --version X.Y.Z       download that release from GitHub (default: latest), from GITHUB_REPOSITORY below.
 #                         Without --package and --version, the latest release is downloaded.
+#                         --repair uses a package only when one of them is given: then update.sh, backup.sh and the
+#                         units are reinstalled from it; without, the installed copies are kept.
 # Database:
 #   --db=local|existing   local: install PostgreSQL here (role and database "domainnotice", localhost only)
 #   --db-host H --db-port P --db-name N --db-user U --db-sslmode disable|allow|prefer|require|verify-ca|verify-full
@@ -67,7 +69,7 @@ ARCH="" PKG_FILE="" PKG_VERSION="" PG_BIN="" WORK=""
 info() { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 cleanup() { if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf -- "$WORK"; fi; }
 trap cleanup EXIT
@@ -389,14 +391,39 @@ create_layout() {
     info "Preparing $INSTALL_ROOT"
     install -d -o root -g root -m 755 "$INSTALL_ROOT" "$INSTALL_ROOT/releases" "$INSTALL_ROOT/bin"
     install -d -o root -g "$SERVICE_USER" -m 750 "$INSTALL_ROOT/config"
-    install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 700 "$INSTALL_ROOT/data" "$INSTALL_ROOT/data/keys" \
-        "$INSTALL_ROOT/data/keys/dataprotection" "$INSTALL_ROOT/data/updates" "$INSTALL_ROOT/data/packages" \
-        "$INSTALL_ROOT/data/packages/agent" "$INSTALL_ROOT/backups"
+    [[ ! -L "$INSTALL_ROOT/data" ]] || die "$INSTALL_ROOT/data is a symbolic link"
+    install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 700 "$INSTALL_ROOT/data"
+    # The service user owns data/ and could have put links there; install -d follows them, so the folders below
+    # are made by the service user itself, never by root.
+    as_service_user install -d -m 700 "$INSTALL_ROOT/data/keys" "$INSTALL_ROOT/data/keys/dataprotection" \
+        "$INSTALL_ROOT/data/updates" "$INSTALL_ROOT/data/packages" "$INSTALL_ROOT/data/packages/agent" ||
+        warn "could not create every folder in $INSTALL_ROOT/data (is one of them a link?)"
+    secure_backups_dir
+}
+
+# backups/ (archives from backup.sh) and backups/pre-update/ (dumps from update.sh) are root:root 700: root writes
+# there, so the service user must not be able to plant links. Before 1.0.5 backups/ belonged to the service user:
+# take the folder over first, then everything in it. Links and other non-regular entries in it are left as they are
+# and never followed (chown -h, find -type f/d).
+secure_backups_dir() {
+    local top="$INSTALL_ROOT/backups" pre="$INSTALL_ROOT/backups/pre-update"
+    [[ ! -L "$top" ]] || die "$top is a symbolic link: backups must be in a real folder owned by root. Move it away (mv $top $top.old; mkdir -m 700 $top) and run this again"
+    [[ -e "$top" ]] || install -d -o root -g root -m 700 "$top"
+    [[ -d "$top" ]] || die "$top is not a folder"
+    chown -h root:root -- "$top"
+    chmod 700 -- "$top"
+    chown -hR root:root -- "$top"
+    find "$top" -mindepth 1 -type d -exec chmod 700 {} +
+    find "$top" -mindepth 1 -type f -exec chmod 600 {} +
+    # Only the service user can have planted a link here (root never does): replace it with a folder.
+    if [[ -L "$pre" ]]; then rm -f -- "$pre"; fi
+    [[ -e "$pre" ]] || install -d -o root -g root -m 700 "$pre"
+    [[ -d "$pre" && ! -L "$pre" && "$(stat -c '%u %a' -- "$pre")" == "0 700" ]] || die "$pre is not a root-only folder"
 }
 
 fix_permissions() { # repair: owners and modes as in plan 11.5, without touching contents
     create_layout
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_ROOT/data"
+    chown -hR "$SERVICE_USER:$SERVICE_USER" "$INSTALL_ROOT/data"
     chmod 700 "$INSTALL_ROOT/data"
     local f
     for f in "$CONFIG_FILE" "$INSTALL_ROOT/config/console.pem" "$INSTALL_ROOT/config/console.key"; do
@@ -404,6 +431,10 @@ fix_permissions() { # repair: owners and modes as in plan 11.5, without touching
     done
     for f in "$UPDATE_ENV" "$STATE_FILE"; do [[ -f "$f" ]] && { chown root:root "$f"; chmod 600 "$f"; }; done
     find "$INSTALL_ROOT/releases" -mindepth 1 -maxdepth 1 -type d -exec chown -hR root:root {} + -exec chmod -R go-w {} +
+    for f in "$INSTALL_ROOT/bin/update.sh" "$INSTALL_ROOT/bin/backup.sh"; do
+        [[ -f "$f" && ! -L "$f" ]] && { chown root:root "$f"; chmod 755 "$f"; }
+    done
+    for f in "${UNITS[@]}"; do [[ -f "$UNIT_DIR/$f" && ! -L "$UNIT_DIR/$f" ]] && { chown root:root "$UNIT_DIR/$f"; chmod 644 "$UNIT_DIR/$f"; }; done
     return 0
 }
 
@@ -418,12 +449,37 @@ unpack_release() {
     mv -T -- "$staging" "$release"
 }
 
-install_deploy_files() { # install_deploy_files RELEASE_DIR: root-owned update.sh and the systemd units
-    local src="$1/deploy/linux" u
+# install_deploy_files DIR: root-owned update.sh, backup.sh and the systemd units, which root runs. DIR is always a
+# package the admin gave this script (--package, or --version downloaded and hash-checked), unpacked by this run:
+# never current/ or releases/, whose content a self-update staged by the service user can decide.
+install_deploy_files() {
+    local src="$1/deploy/linux" u f
+    for f in update.sh "${UNITS[@]}"; do
+        [[ -f "$src/$f" && ! -L "$src/$f" ]] || die "the package has no deploy/linux/$f"
+    done
+    [[ ! -L "$src/backup.sh" ]] || die "deploy/linux/backup.sh in the package is a link"
     install -o root -g root -m 755 "$src/update.sh" "$INSTALL_ROOT/bin/update.sh"
     if [[ -f "$src/backup.sh" ]]; then install -o root -g root -m 755 "$src/backup.sh" "$INSTALL_ROOT/bin/backup.sh"; fi
     for u in "${UNITS[@]}"; do install -o root -g root -m 644 "$src/$u" "$UNIT_DIR/$u"; done
     systemctl daemon-reload
+}
+
+missing_deploy_files() { # prints the installed root-run files that are missing (repair without a package)
+    local f
+    for f in "$INSTALL_ROOT/bin/update.sh" "$INSTALL_ROOT/bin/backup.sh" "${UNITS[@]/#/$UNIT_DIR/}"; do
+        [[ -f "$f" && ! -L "$f" ]] || printf '%s\n' "$f"
+    done
+}
+
+as_service_user() { # as_service_user CMD...: runs a command as the service user with a clean environment
+    runuser -u "$SERVICE_USER" -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 "$@"
+}
+
+put_as_service_user() { # put_as_service_user DEST <CONTENT: the service user writes DEST (temp file + rename), so
+    # root never opens a path in the service user's folders for writing
+    # shellcheck disable=SC2016 # expanded by the inner shell
+    as_service_user /bin/sh -c 'umask 077; t="$(mktemp "$1.XXXXXX")" || exit 1
+        if cat >"$t" && mv -fT -- "$t" "$1"; then exit 0; fi; rm -f -- "$t"; exit 1' sh "$1"
 }
 
 # ------------------------------------------------------------------------------------------------ step 4: database
@@ -769,7 +825,8 @@ do_install() {
     write_config
     write_update_env
     setup_certificate
-    install_deploy_files "$INSTALL_ROOT/current"
+    # Just unpacked by this run from the admin's package (unpack_release replaces any earlier folder of that name).
+    install_deploy_files "$INSTALL_ROOT/releases/$PKG_VERSION"
     migrate "$INSTALL_ROOT/current"
     create_admin_account
     # install.state marks a finished install; without it a re-run starts over instead of offering repair.
@@ -786,10 +843,31 @@ do_repair() {
     SERVER_NAME="$(read_state SERVER_NAME || hostname -f)"
     CONSOLE_PORT="$(read_state CONSOLE_PORT || echo 443)"
     CONSOLE_MODE="$(read_state CONSOLE_MODE || echo https)"
+    # update.sh, backup.sh and the units run as root, so they never come from current/ (a self-update staged by the
+    # service user decides what is in there). With --package or --version they are taken from that package, after
+    # the same checks as an install; without, the installed copies are kept.
+    local missing pkgdir=""
+    if [[ -z "$PACKAGE" && -z "$VERSION_ARG" ]]; then
+        missing="$(missing_deploy_files)"
+        [[ -z "$missing" ]] || die "missing: ${missing//$'\n'/, }. Run install.sh --repair --package FILE (or --version $version) to reinstall them from a verified package"
+    fi
     install_packages
+    if [[ -n "$PACKAGE" || -n "$VERSION_ARG" ]]; then
+        obtain_package
+        [[ "$PKG_VERSION" == "$version" ]] ||
+            warn "the package is $PKG_VERSION, the running release is $version: only update.sh, backup.sh and the units are taken from it"
+        pkgdir="$WORK/pkg"
+        DN_ERROR=""
+        dn_safe_unpack "$PKG_FILE" "$pkgdir" || die "unsafe or broken package: $DN_ERROR"
+    fi
     create_user
     fix_permissions
-    install_deploy_files "$INSTALL_ROOT/current"
+    if [[ -n "$pkgdir" ]]; then
+        install_deploy_files "$pkgdir"
+    else
+        info "Keeping the installed update.sh, backup.sh and units (pass --package or --version to replace them)"
+        systemctl daemon-reload
+    fi
     [[ -f "$UPDATE_ENV" ]] || warn "$UPDATE_ENV is missing: self-update will fail until it exists"
     [[ -f "$CONFIG_FILE" ]] || die "$CONFIG_FILE is missing; restore it or run --purge and install again"
     migrate "$INSTALL_ROOT/current"
@@ -816,34 +894,39 @@ do_upgrade() {
     dn_safe_unpack "$PKG_FILE" "$pkgdir" || die "unsafe or broken package: $DN_ERROR"
     install_deploy_files "$pkgdir"
 
-    # Stage the package like the server does, then run the update unit and wait for it.
+    # Stage the package like the server does, then run the update unit and wait for it. data/updates belongs to the
+    # service user, so the service user writes there (root only hands over the content on stdin).
     local stage="$INSTALL_ROOT/data/updates/$PKG_VERSION" name sha run_id
     name="$(basename "$PKG_FILE")"
-    rm -rf -- "$stage"
-    install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 700 "$stage"
-    install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 600 "$PKG_FILE" "$stage/$name"
+    as_service_user rm -rf -- "$stage"
+    as_service_user mkdir -m 700 -- "$stage" || die "cannot create $stage"
+    put_as_service_user "$stage/$name" <"$PKG_FILE" || die "cannot stage the package"
     sha="$(sha256_of "$PKG_FILE")"
-    printf '%s  %s\n' "$sha" "$name" >"$WORK/SHA256SUMS.staged"
-    install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 600 "$WORK/SHA256SUMS.staged" "$stage/SHA256SUMS.txt"
+    printf '%s  %s\n' "$sha" "$name" | put_as_service_user "$stage/SHA256SUMS.txt" || die "cannot stage SHA256SUMS.txt"
     run_id="$(new_uuid)"
     printf '%s\n' "# Written by install.sh --upgrade" "format=1" "run_id=$run_id" "version=$PKG_VERSION" \
-        "from_version=$current" "arch=$ARCH" "file=$name" "sha256=$sha" >"$WORK/request.conf"
-    install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 600 "$WORK/request.conf" "$INSTALL_ROOT/data/updates/.request.conf.tmp"
-    mv -T -- "$INSTALL_ROOT/data/updates/.request.conf.tmp" "$INSTALL_ROOT/data/updates/request.conf"
+        "from_version=$current" "arch=$ARCH" "file=$name" "sha256=$sha" |
+        put_as_service_user "$INSTALL_ROOT/data/updates/request.conf" || die "cannot write the update request"
     systemctl start domainnotice-update.service || true
 
     local now_version result="$INSTALL_ROOT/data/updates/result.conf"
     now_version="$(installed_version || true)"
-    if [[ -f "$result" ]]; then grep -E '^(state|message)=' "$result" || true; fi
+    as_service_user grep -E '^(state|message)=' -- "$result" 2>/dev/null || true
     [[ "$now_version" == "$PKG_VERSION" ]] || die "the upgrade did not complete; see journalctl -u domainnotice-update"
     print_summary
 }
 
-backup_script() { # the installed backup.sh, or the one next to this install.sh (older installs)
+# The installed backup.sh, else (installs older than 1.0.2) the one next to this install.sh, but only when only root
+# can change it and its update.sh (install.sh is often downloaded alone into a shared folder). Never current/.
+root_only_file() { [[ -f "$1" && ! -L "$1" && "$(stat -c %u -- "$1")" == 0 && "$(stat -c %A -- "$1")" != ?????w???? && "$(stat -c %A -- "$1")" != ????????w? ]]; }
+backup_script() {
+    local here
+    here="$(dirname -- "${BASH_SOURCE[0]}")"
     if [[ -x "$INSTALL_ROOT/bin/backup.sh" ]]; then echo "$INSTALL_ROOT/bin/backup.sh"
-    elif [[ -f "$(dirname -- "${BASH_SOURCE[0]}")/backup.sh" ]]; then echo "$(dirname -- "${BASH_SOURCE[0]}")/backup.sh"
-    elif [[ -f "$INSTALL_ROOT/current/deploy/linux/backup.sh" ]]; then echo "$INSTALL_ROOT/current/deploy/linux/backup.sh"
-    else die "backup.sh not found; run --repair with a newer package"; fi
+    elif root_only_file "$here/backup.sh" && root_only_file "$here/update.sh" &&
+        [[ "$(stat -c %u -- "$here")" == 0 && "$(stat -c %A -- "$here")" != ?????w???? && "$(stat -c %A -- "$here")" != ????????w? ]]; then
+        echo "$here/backup.sh"
+    else die "backup.sh not found; run install.sh --repair --package FILE (or --version X.Y.Z) to install it"; fi
 }
 
 do_backup() {

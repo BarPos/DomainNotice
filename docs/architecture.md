@@ -71,7 +71,9 @@ The messages are listed in [Protocol reference](reference/protocol.md).
   further.
 - **The AD computer link** is confirmed automatically:
   - **Kerberos proof:** the agent, running as LocalSystem, gets a ticket for `DomainNotice/<server-fqdn>`, bound to the
-    TLS channel. The server validates it offline with the bind account's keys, then links the computer as *Proven*.
+    server's TLS certificate (channel binding). The server validates it offline with the bind account's keys, then
+    links the computer as *Proven*. A proof does not take the link from another proven record seen in the last 7 days;
+    that newcomer waits for approval.
   - **Name fallback:** the computer is linked when exactly one AD computer has its name and no other key holds that
     link (*Matched by name*).
   - **Conflicts:** typically a re-imaged PC without a proof. The newcomer goes to **Computers → Awaiting approval**

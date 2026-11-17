@@ -1,13 +1,11 @@
+using System.Globalization;
 using System.Security.Claims;
 using DomainNotice.Console.Services;
 using DomainNotice.Server.Abstractions;
-using DomainNotice.Server.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Components.Server;
-using Microsoft.AspNetCore.Http;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MudBlazor;
@@ -23,18 +21,29 @@ public static class ConsoleAuth
     public const string ViewerPolicy = "Viewer";
     public const string SourceClaim = "domainnotice:source";
     public const string DisplayNameClaim = "domainnotice:display-name";
+    /// <summary>Sign-in time, Unix seconds (UTC). The absolute session lifetime counts from it.</summary>
+    public const string IssuedAtClaim = "domainnotice:issued-at";
+    /// <summary>Domain: objectGUID of the user ("D" format).</summary>
+    public const string ObjectGuidClaim = "domainnotice:object-guid";
+    /// <summary>Local: stamp of the password the session signed in with.</summary>
+    public const string PasswordStampClaim = "domainnotice:password-stamp";
     public const string LoginPath = "/account/login";
 
     public static ClaimsPrincipal CreatePrincipal(SignInOutcome outcome)
     {
         var role = outcome.Role is ConsoleRoles.Admin or ConsoleRoles.Viewer ? outcome.Role : ConsoleRoles.Viewer;
+        var issued = outcome.IssuedAtUtc ?? DateTime.UtcNow;
         var claims = new List<Claim>
         {
             new(ClaimTypes.Name, outcome.UserName ?? ""),
             new(ClaimTypes.Role, role),
             new(SourceClaim, outcome.Source.ToString()),
+            new(IssuedAtClaim, new DateTimeOffset(DateTime.SpecifyKind(issued, DateTimeKind.Utc)).ToUnixTimeSeconds()
+                .ToString(CultureInfo.InvariantCulture)),
         };
         if (!string.IsNullOrWhiteSpace(outcome.DisplayName)) claims.Add(new Claim(DisplayNameClaim, outcome.DisplayName));
+        if (outcome.DirectoryObjectGuid is { } guid) claims.Add(new Claim(ObjectGuidClaim, guid.ToString("D")));
+        if (!string.IsNullOrEmpty(outcome.PasswordStamp)) claims.Add(new Claim(PasswordStampClaim, outcome.PasswordStamp));
         return new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme, ClaimTypes.Name, ClaimTypes.Role));
     }
 
@@ -43,47 +52,72 @@ public static class ConsoleAuth
     public static bool IsConsoleUser(this ClaimsPrincipal user) =>
         user.Identity?.IsAuthenticated == true && (user.IsInRole(ConsoleRoles.Admin) || user.IsInRole(ConsoleRoles.Viewer));
 
-    /// <summary>
-    /// Local accounts can be disabled or deleted while signed in; such a principal stops being valid. Domain accounts
-    /// cannot be re-checked without an LDAP bind and stay valid until the cookie expires.
-    /// </summary>
-    public static async Task<bool> IsStillValidAsync(ClaimsPrincipal user, IDbContextFactory<AppDbContext> dbFactory, CancellationToken ct)
+    /// <summary>The session a principal claims, or null when it is not a complete Console principal.</summary>
+    public static ConsoleSession? SessionOf(ClaimsPrincipal user)
     {
-        if (user.FindFirst(SourceClaim)?.Value != nameof(SignInSource.Local)) return true;
-        var normalized = (user.Identity?.Name ?? "").Trim().ToLowerInvariant();
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        return await db.LocalAccounts.AnyAsync(a => a.NormalizedUserName == normalized && !a.Disabled, ct);
+        if (user.Identity?.IsAuthenticated != true) return null;
+        if (!Enum.TryParse<SignInSource>(user.FindFirst(SourceClaim)?.Value, out var source) || !Enum.IsDefined(source)) return null;
+        var role = user.FindFirst(ClaimTypes.Role)?.Value;
+        if (role is not (ConsoleRoles.Admin or ConsoleRoles.Viewer)) return null;
+        DateTime? issued = long.TryParse(user.FindFirst(IssuedAtClaim)?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var s)
+            ? DateTimeOffset.FromUnixTimeSeconds(s).UtcDateTime
+            : null;
+        Guid? guid = Guid.TryParse(user.FindFirst(ObjectGuidClaim)?.Value, out var g) ? g : null;
+        return new ConsoleSession(user.Identity.Name ?? "", source, role, issued, guid, user.FindFirst(PasswordStampClaim)?.Value);
     }
+
+    /// <summary>
+    /// Whether a signed-in principal is still valid (absolute lifetime, local account and password unchanged, domain
+    /// user still enabled and in a group of the same role): see <see cref="IConsoleSessionValidator"/>. Principals
+    /// without the claims of this version (older cookies) are not valid.
+    /// </summary>
+    public static Task<bool> IsStillValidAsync(ClaimsPrincipal user, IConsoleSessionValidator validator, CancellationToken ct) =>
+        SessionOf(user) is { } session ? validator.IsValidAsync(session, ct) : Task.FromResult(false);
 
     internal static async Task ValidatePrincipalAsync(CookieValidatePrincipalContext context)
     {
         if (context.Principal is null) return;
-        var dbFactory = context.HttpContext.RequestServices.GetRequiredService<IDbContextFactory<AppDbContext>>();
+        var validator = context.HttpContext.RequestServices.GetRequiredService<IConsoleSessionValidator>();
+        bool valid;
         try
         {
-            if (!await IsStillValidAsync(context.Principal, dbFactory, context.HttpContext.RequestAborted))
-            {
-                context.RejectPrincipal();
-                await context.HttpContext.SignOutAsync(Scheme);
-            }
+            valid = await IsStillValidAsync(context.Principal, validator, context.HttpContext.RequestAborted);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Database down: do not lock everyone out of read-only pages; the next request checks again.
+            // The validator handles database problems itself; anything else should not lock everyone out.
             context.HttpContext.RequestServices.GetRequiredService<ILogger<ConsoleUser>>()
-                .LogWarning(ex, "Could not re-check the local account of {User}", context.Principal.Identity?.Name);
+                .LogWarning(ex, "Could not re-check the session of {User}", context.Principal.Identity?.Name);
+            return;
+        }
+        if (!valid)
+        {
+            context.RejectPrincipal();
+            await context.HttpContext.SignOutAsync(Scheme);
         }
     }
 }
 
-/// <summary>Re-checks local accounts of open circuits every few minutes (disabled accounts lose access).</summary>
-internal sealed class ConsoleRevalidatingAuthStateProvider(ILoggerFactory loggerFactory, IDbContextFactory<AppDbContext> dbFactory)
+/// <summary>Re-checks the session of open circuits every minute (same rules as each request).</summary>
+internal sealed class ConsoleRevalidatingAuthStateProvider(ILoggerFactory loggerFactory, IConsoleSessionValidator validator,
+    ILogger<ConsoleRevalidatingAuthStateProvider> logger)
     : RevalidatingServerAuthenticationStateProvider(loggerFactory)
 {
-    protected override TimeSpan RevalidationInterval => TimeSpan.FromMinutes(5);
+    protected override TimeSpan RevalidationInterval => TimeSpan.FromMinutes(1);
 
-    protected override Task<bool> ValidateAuthenticationStateAsync(AuthenticationState authenticationState, CancellationToken cancellationToken) =>
-        ConsoleAuth.IsStillValidAsync(authenticationState.User, dbFactory, cancellationToken);
+    protected override async Task<bool> ValidateAuthenticationStateAsync(AuthenticationState authenticationState, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ConsoleAuth.IsStillValidAsync(authenticationState.User, validator, cancellationToken);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // An exception would end the revalidation loop for this circuit for good; keep it and check again later.
+            logger.LogWarning(e, "Could not re-check a Console circuit.");
+            return true;
+        }
+    }
 }
 
 /// <summary>

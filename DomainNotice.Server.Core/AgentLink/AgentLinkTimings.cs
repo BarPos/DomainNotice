@@ -24,6 +24,22 @@ public sealed class AgentLinkTimings
     /// <summary>Failed enrolments per remote IP within <see cref="EnrolFailureWindow"/> before Refused{rate-limited}.</summary>
     public int EnrolMaxFailures { get; set; } = 5;
     public TimeSpan EnrolFailureWindow { get; set; } = TimeSpan.FromMinutes(15);
+    /// <summary>Install password (PBKDF2) checks running at once, server-wide. Further attempts queue.</summary>
+    public int EnrolMaxParallelHashes { get; set; } = 2;
+    /// <summary>
+    /// How long an Enroll may wait for its password check before the connection is closed without a refusal (the
+    /// agent then retries after its short back-off). Below the agent's 60 s reply timeout.
+    /// </summary>
+    public TimeSpan EnrolQueueTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    /// <summary>Status messages of one connection are applied at most this often; the latest pending one wins.</summary>
+    public TimeSpan StatusMinInterval { get; set; } = TimeSpan.FromSeconds(5);
+    /// <summary>
+    /// A Proven AD link whose record was seen this recently is not moved to another key by that key's Kerberos proof
+    /// alone: the newcomer is put on Awaiting approval instead.
+    /// </summary>
+    public TimeSpan ProofTakeoverQuietPeriod { get; set; } = TimeSpan.FromDays(7);
+    /// <summary>Window of the per-computer limits on new session users and name changes.</summary>
+    public TimeSpan InventoryLimitWindow { get; set; } = TimeSpan.FromHours(1);
     /// <summary>After sending Refused, wait this long for the peer to close before closing the socket.</summary>
     public TimeSpan RefuseLinger { get; set; } = TimeSpan.FromSeconds(2);
     /// <summary>Kerberos clock skew; sizes the authenticator replay cache (2 x skew). Ticket times use Kerberos.NET's 5-minute default.</summary>

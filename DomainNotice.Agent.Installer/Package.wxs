@@ -127,11 +127,13 @@
       </RegistryKey>
     </Component>
 
-    <!-- %ProgramData%\DomainNotice (logs, updates): SYSTEM + Administrators only, inheritance broken (plan 3.2).
-         Users get no access here. -->
+    <!-- %ProgramData%\DomainNotice (logs, updates): owner SYSTEM, SYSTEM + Administrators only, inheritance broken
+         (plan 3.2). Users get no access here. The owner part asks Windows Installer to replace the owner of a folder
+         that a standard user created before the install; whether it does is not documented, so the service does not
+         rely on it: at every start it moves away a folder owned by or open to anyone else and creates a new one. -->
     <Component Id="DataFolderComponent" Directory="DATAFOLDER">
       <CreateFolder>
-        <PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />
+        <PermissionEx Sddl="O:SYG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />
       </CreateFolder>
       <RegistryValue Root="HKLM" Key="Software\DomainNotice\Agent" Name="DataFolder" Type="string" Value="[DATAFOLDER]" KeyPath="yes" />
     </Component>

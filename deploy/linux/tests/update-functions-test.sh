@@ -95,6 +95,11 @@ expect_false "unpack into existing folder refused" dn_safe_unpack "$FIX/good.tar
 for name in absolute dotdot dotdot-inner link-outside link-absolute link-then-write hardlink fifo chardev; do
     unpack_refused "$name"
 done
+if realpath -m / >/dev/null 2>&1; then
+    unpack_refused link-chain
+else
+    echo "# skipped link-chain: no GNU realpath -m here (the textual check alone accepts it)"
+fi
 if [[ -z "$(find "$outside" "$TMP/work" -name 'dn-evil-*' -print -quit)" && ! -e /tmp/dn-evil-absolute ]]; then
     ok "no file written outside the release folder"
 else

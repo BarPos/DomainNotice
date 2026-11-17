@@ -85,9 +85,9 @@ through it.
 
 If you put a reverse proxy in front of the Console:
 - it must allow **WebSocket upgrades**, because the Console is Blazor Server;
-- it should allow request bodies of about 300 MB, for the agent MSI upload;
-- optionally, set `Console:ForwardedHeaders:Enabled` to `true` and list the proxy in `KnownProxies`. Sign-in rate
-  limits and the audit log then see the real client IP.
+- set `Console:ForwardedHeaders:Enabled` to `true` and list the proxy in `KnownProxies`. Sign-in rate limits and the
+  audit log then see the real client IP. Without it, every client has the proxy's address (loopback for a proxy on the
+  same host), so one client's failed sign-ins count against everyone's per-IP limit.
 
 To switch an existing install:
 1. Change `Console:Urls` in `/opt/domainnotice/config/appsettings.Production.json`.
@@ -104,8 +104,8 @@ To switch an existing install:
 | `/opt/domainnotice/config/console.pem`, `console.key` | root:domainnotice 640 | Console certificate |
 | `/opt/domainnotice/config/update.env` | root 600 | Database settings for `update.sh` |
 | `/opt/domainnotice/data/` | domainnotice 700 | Agent-link key (`keys/agent-link.pfx`), Data Protection keys, package cache, staged updates |
-| `/opt/domainnotice/backups/` | domainnotice 700 | `pg_dump` backups taken before each update |
-| `/opt/domainnotice/bin/update.sh` | root 755 | The updater (replaced only by `install.sh`) |
+| `/opt/domainnotice/backups/` | root 700 | Archives from `backup.sh`; `pre-update/` holds the `pg_dump` taken before each update. The server cannot read or write it. |
+| `/opt/domainnotice/bin/update.sh`, `backup.sh` | root 755 | The updater and the backup script (replaced only by `install.sh` from a package you give it, see [Updates](updates.md#refreshing-updatesh-backupsh-and-the-units)) |
 | `/etc/systemd/system/domainnotice.service` | | The server (`Type=notify`, `User=domainnotice`, hardened) |
 | `/etc/systemd/system/domainnotice-update.{path,service}` | | Applies a staged self-update as root |
 
@@ -129,7 +129,7 @@ Each item also has a flag:
 
 | Command | Effect |
 |---|---|
-| `install.sh --repair` | Re-applies the units, owners and modes; never overwrites config or data |
+| `install.sh --repair` | Re-applies owners and modes and restarts the services; never overwrites config or data. Keeps the installed `update.sh`, `backup.sh` and units; with `--package FILE` or `--version X.Y.Z` it reinstalls them from that package |
 | `install.sh --upgrade --package FILE` | Installs a newer release through the same path as the Console's *Update now* |
 | `install.sh --backup [--output PATH]` | Backs up the database, configuration, keys, data and the running program (see [Backup and restore](operations.md#backup-and-restore)) |
 | `install.sh --restore FILE` | Restores a backup on this server (asks for confirmation; `--yes` when unattended) |

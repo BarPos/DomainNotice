@@ -65,6 +65,7 @@ internal sealed class DirectorySyncEngine(
             await foreach (var e in session.SearchObjectsAsync(since, ct)) entries.Add(e);
 
             run.ObjectsChanged = await ApplyAsync(entries, run.Kind == DirectorySyncKind.Full, run.StartedAtUtc, ct);
+            await StoreNetBiosNameAsync(session, ct);
             run.HighestUsn = root.HighestCommittedUsn;
             await settings.SetAsync(SettingKeys.DirectoryHighestUsnPrefix + hostKey,
                 root.HighestCommittedUsn.ToString(CultureInfo.InvariantCulture), SyncActor, ct);
@@ -87,6 +88,36 @@ internal sealed class DirectorySyncEngine(
             await db.SaveChangesAsync(CancellationToken.None);
         }
         return run;
+    }
+
+    /// <summary>
+    /// Stores the domain's NetBIOS name for targeting (agents report "DOMAIN\user"; only users of this domain get
+    /// directory facts). A failed or empty lookup keeps the stored value and is logged; it does not fail the sync.
+    /// </summary>
+    private async Task StoreNetBiosNameAsync(ILdapSourceSession session, CancellationToken ct)
+    {
+        string? name;
+        try
+        {
+            name = await session.ReadNetBiosNameAsync(ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            logger.LogWarning(e, "Could not read the NetBIOS name of the domain; keeping the stored one.");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            logger.LogWarning("The NetBIOS name of the domain of Directory:BaseDn was not found (crossRef under CN=Partitions). " +
+                              "Until it is known, users reported by agents get no directory groups or OUs.");
+            return;
+        }
+        name = name.Trim();
+        if (!string.Equals(await settings.GetAsync(SettingKeys.DirectoryNetBiosName, ct), name, StringComparison.Ordinal))
+        {
+            await settings.SetAsync(SettingKeys.DirectoryNetBiosName, name, SyncActor, ct);
+            logger.LogInformation("Directory domain NetBIOS name: {NetBios}.", name);
+        }
     }
 
     /// <summary>Highest USN to continue from, or null when a full sync is needed.</summary>
@@ -265,8 +296,11 @@ internal sealed class DirectorySyncEngine(
     private static async Task<int> RewriteDescendantsAsync(AppDbContext db, string oldDn, string newDn,
         IEnumerable<Guid> alreadyUpdated, DateTime nowUtc, CancellationToken ct)
     {
-        var suffix = "," + oldDn.ToLowerInvariant();
+        var oldLower = oldDn.ToLowerInvariant();
+        var suffix = "," + oldLower;
         var skip = alreadyUpdated.ToHashSet();
+        // The SQL suffix match is only a prefilter: "cn=x\,ou=a,dc=..." ends with ",ou=a,dc=..." too, but its comma is
+        // escaped (part of the CN), so it is not below OU=a.
         var descendants = await db.DirectoryObjects
             .Where(o => !o.Deleted && o.DistinguishedNameLower.EndsWith(suffix))
             .ToListAsync(ct);
@@ -274,6 +308,7 @@ internal sealed class DirectorySyncEngine(
         foreach (var d in descendants)
         {
             if (skip.Contains(d.ObjectGuid)) continue;
+            if (!DistinguishedNames.IsStrictlyBelowLower(d.DistinguishedNameLower, oldLower)) continue;
             var prefix = d.DistinguishedName[..^oldDn.Length];
             d.DistinguishedName = prefix + newDn;
             d.DistinguishedNameLower = d.DistinguishedName.ToLowerInvariant();

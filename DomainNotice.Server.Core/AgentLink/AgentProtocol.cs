@@ -62,8 +62,15 @@ internal sealed class AgentProtocol(
 
     private enum Phase { Unknown, Known, Online }
 
-    public async Task RunAsync(TcpClient tcp, CancellationToken stopping)
+    /// <summary>Largest frame read from a key that is not enrolled (only Enroll is allowed).</summary>
+    private int EnrolReadLimit => Math.Clamp(agentsOptions.Value.MaxEnrolMessageBytes, 1024, Math.Max(1024, agentsOptions.Value.MaxMessageBytes));
+
+    /// <summary>Largest frame read from an enrolled key.</summary>
+    private int InboundReadLimit => Math.Clamp(agentsOptions.Value.MaxInboundMessageBytes, 1024, Math.Max(1024, agentsOptions.Value.MaxMessageBytes));
+
+    public async Task RunAsync(TcpClient tcp, ConnectionLimiter.Admission? admission, CancellationToken stopping)
     {
+        using var _ = admission;
         var remote = tcp.Client.RemoteEndPoint;
         AgentConnection? conn = null;
         try
@@ -92,7 +99,9 @@ internal sealed class AgentProtocol(
             var fingerprint = KeyFingerprint.Compute(clientCert);
             conn = new AgentConnection(tcp, ssl, agentsOptions.Value.MaxMessageBytes, fingerprint, identity.EndpointChannelBinding,
                 time, logger, timings.RefuseLinger, stopping);
-            await RunConnectionAsync(conn, stopping);
+            conn.Frames.MaxReadBodyBytes = EnrolReadLimit;
+            conn.Frames.InitialBodyBytes = Framing.InitialBodyBuffer; // untrusted peer: grow as bytes arrive
+            await RunConnectionAsync(conn, admission, stopping);
         }
         catch (Exception ex) when (ex is AuthenticationException or IOException or OperationCanceledException or SocketException or ObjectDisposedException)
         {
@@ -109,7 +118,7 @@ internal sealed class AgentProtocol(
         }
     }
 
-    private async Task RunConnectionAsync(AgentConnection conn, CancellationToken stopping)
+    private async Task RunConnectionAsync(AgentConnection conn, ConnectionLimiter.Admission? admission, CancellationToken stopping)
     {
         var phase = Phase.Unknown;
         await using (var db = await dbFactory.CreateDbContextAsync(stopping))
@@ -131,11 +140,15 @@ internal sealed class AgentProtocol(
                     logger.LogWarning("Refused replaced computer {Computer} ({Name}) from {Remote}", computer.Id, computer.Name, conn.RemoteEndPoint);
                     await conn.CloseAsync(RefusedReasons.Replaced, "This computer record was replaced by a newer installation.");
                 }
-                else phase = Phase.Known;
+                else
+                {
+                    phase = Phase.Known;
+                    conn.Frames.MaxReadBodyBytes = InboundReadLimit;
+                }
             }
         }
 
-        Channel<IncomingFrame>? queue = null;
+        InboundQueue? queue = null;
         Task? worker = null;
         try
         {
@@ -155,8 +168,9 @@ internal sealed class AgentProtocol(
                     }
                     catch (ProtocolException ex)
                     {
-                        logger.LogInformation("Protocol error from {Conn}: {Error}", conn, ex.Message);
-                        if (!conn.IsClosing) await conn.CloseAsync(RefusedReasons.ProtocolError, ex.Message);
+                        var error = LogText.Clip(ex.Message, 200);
+                        logger.LogInformation("Protocol error from {Conn}: {Error}", conn, error);
+                        if (!conn.IsClosing) await conn.CloseAsync(RefusedReasons.ProtocolError, error);
                         break;
                     }
                     catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or AuthenticationException)
@@ -172,6 +186,7 @@ internal sealed class AgentProtocol(
                 {
                     case Phase.Unknown:
                         phase = await HandleUnknownKeyAsync(conn, frame, stopping);
+                        if (phase == Phase.Known) conn.Frames.MaxReadBodyBytes = InboundReadLimit;
                         break;
                     case Phase.Known:
                         if (frame.Message is Hello hello)
@@ -179,12 +194,11 @@ internal sealed class AgentProtocol(
                             if (await HandleHelloAsync(conn, frame.Envelope!, hello, stopping))
                             {
                                 phase = Phase.Online;
-                                queue = Channel.CreateBounded<IncomingFrame>(new BoundedChannelOptions(256)
-                                {
-                                    SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait,
-                                });
-                                worker = Task.Run(() => WorkerAsync(conn, queue.Reader, stopping), CancellationToken.None);
-                                await AfterOnlineAsync(conn, queue.Writer);
+                                admission?.MarkOnline();
+                                queue = new InboundQueue(time, timings.StatusMinInterval);
+                                var q = queue;
+                                worker = Task.Run(() => WorkerAsync(conn, q), CancellationToken.None);
+                                await q.WriteMarkerAsync(OnlineMarker, conn.Aborted);
                             }
                         }
                         else if (frame.Message is Enroll)
@@ -199,7 +213,7 @@ internal sealed class AgentProtocol(
                         if (frame.Message is Ping)
                             await conn.SendAsync(new Pong(), frame.Envelope!.Id, stopping);
                         else if (frame.Message is not null)
-                            await queue!.Writer.WriteAsync(frame, conn.Aborted);
+                            await queue!.EnqueueAsync(frame, conn.Aborted);
                         // Chunks and unknown types from an agent are ignored.
                         break;
                 }
@@ -211,7 +225,7 @@ internal sealed class AgentProtocol(
         }
         finally
         {
-            queue?.Writer.TryComplete();
+            queue?.Complete();
             conn.Abort();
             if (worker is not null)
             {
@@ -239,13 +253,19 @@ internal sealed class AgentProtocol(
     {
         if (frame.Message is not Enroll enroll)
         {
-            logger.LogInformation("Unknown agent key from {Remote} sent {Type}; refused", conn.RemoteEndPoint, frame.Envelope?.Type ?? "a chunk");
+            logger.LogInformation("Unknown agent key from {Remote} sent {Type}; refused", conn.RemoteEndPoint,
+                frame.Envelope is { } env ? LogText.Clip(env.Type) : "a chunk");
             await conn.CloseAsync(RefusedReasons.UnknownKey, "This agent key is not enrolled. Only Enroll is allowed.");
             return Phase.Unknown;
         }
-        var decision = await enrolment.CheckAsync(conn.RemoteEndPoint.Address, enroll.InstallPassword, ct);
+        EnrolDecision decision;
+        using (var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, conn.Aborted))
+            decision = await enrolment.CheckAsync(conn.RemoteEndPoint.Address, enroll.InstallPassword, linked.Token);
         switch (decision.Outcome)
         {
+            case EnrolOutcome.Busy:
+                await conn.CloseAsync();
+                return Phase.Unknown;
             case EnrolOutcome.RateLimited:
                 logger.LogWarning("Enrolment from {Remote} rate-limited", conn.RemoteEndPoint);
                 await conn.CloseAsync(RefusedReasons.RateLimited, decision.Error);
@@ -270,7 +290,7 @@ internal sealed class AgentProtocol(
             id = existing.Id;
         }
         conn.ComputerId = id;
-        logger.LogInformation("Enrolled computer {Computer} ({Name}) from {Remote}, key {Fingerprint}", id, enroll.ComputerName,
+        logger.LogInformation("Enrolled computer {Computer} ({Name}) from {Remote}, key {Fingerprint}", id, LogText.Clip(enroll.ComputerName),
             conn.RemoteEndPoint, conn.Fingerprint);
         await conn.SendAsync(new EnrollResult { Accepted = true, ComputerId = id }, frame.Envelope!.Id, ct);
         return Phase.Known;
@@ -282,7 +302,7 @@ internal sealed class AgentProtocol(
         if (!AppVersion.IsAgentSupported(hello.AgentVersion))
         {
             logger.LogWarning("Computer {Computer} runs agent {Version}, which this server ({Server}) does not support", conn.ComputerId,
-                hello.AgentVersion, AppVersion.Current);
+                LogText.Clip(hello.AgentVersion, 32), AppVersion.Current);
             await conn.SendAsync(new Welcome { Compatible = false, ServerVersion = AppVersion.Current }, envelope.Id, ct);
             await conn.CloseAsync();
             return false;
@@ -321,36 +341,45 @@ internal sealed class AgentProtocol(
         return true;
     }
 
-    /// <summary>AD name check and OnAgentOnline run on the worker, before any queued message.</summary>
-    private static ValueTask AfterOnlineAsync(AgentConnection conn, ChannelWriter<IncomingFrame> writer) =>
-        writer.WriteAsync(OnlineMarker, conn.Aborted);
-
+    /// <summary>Queued first after Hello: the AD name check and OnAgentOnline run before any queued message.</summary>
     private static readonly IncomingFrame OnlineMarker = IncomingFrame.FromChunk(new PackageChunk(Guid.Empty, 0, default));
 
-    private async Task WorkerAsync(AgentConnection conn, ChannelReader<IncomingFrame> reader, CancellationToken stopping)
+    private async Task WorkerAsync(AgentConnection conn, InboundQueue queue)
     {
         var ct = conn.Aborted;
-        await foreach (var frame in reader.ReadAllAsync(CancellationToken.None))
+        try
         {
-            if (ct.IsCancellationRequested) break;
-            try
+            await foreach (var item in queue.ReadAllAsync(ct))
             {
-                if (ReferenceEquals(frame, OnlineMarker))
+                if (ct.IsCancellationRequested) break;
+                var frame = item.Frame;
+                try
                 {
-                    await adLink.EvaluateNameAsync(conn.ComputerId, ct);
-                    await observers.OnlineAsync(conn, ct);
-                    continue;
+                    if (ReferenceEquals(frame, OnlineMarker))
+                    {
+                        await adLink.EvaluateNameAsync(conn.ComputerId, ct);
+                        await observers.OnlineAsync(conn, ct);
+                        continue;
+                    }
+                    await DispatchAsync(conn, frame.Envelope!, frame.Message!, ct);
                 }
-                await DispatchAsync(conn, frame.Envelope!, frame.Message!, ct);
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Handling {Type} from {Conn} failed", LogText.Clip(frame.Envelope?.Type), conn);
+                }
+                finally
+                {
+                    queue.Done(item);
+                }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Handling {Type} from {Conn} failed", frame.Envelope?.Type, conn);
-            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Aborted while waiting for the Status interval.
         }
     }
 
@@ -395,7 +424,7 @@ internal sealed class AgentProtocol(
         var result = await kerberos.ValidateAsync(prove.KerberosToken, conn.ChannelBinding, ct);
         if (!result.Ok)
         {
-            logger.LogInformation("Kerberos proof of computer {Computer} refused: {Error}", conn.ComputerId, result.Error);
+            logger.LogInformation("Kerberos proof of computer {Computer} refused: {Error}", conn.ComputerId, LogText.Clip(result.Error, 300));
             await conn.SendAsync(new IdentityResult { Linked = false, Error = result.Error }, envelope.Id, ct);
             return;
         }

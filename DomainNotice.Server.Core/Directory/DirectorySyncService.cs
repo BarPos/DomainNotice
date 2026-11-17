@@ -55,6 +55,8 @@ internal sealed class DirectorySyncService(
             return;
         }
 
+        if (LdapSecurityPolicy.UnknownSecurityWarning(o) is { } securityWarning) logger.LogWarning("{Warning}", securityWarning);
+
         var scheduled = true;
         var configError = LdapSecurityPolicy.ValidateServiceAccount(o, env.IsDevelopment());
         if (configError is not null)

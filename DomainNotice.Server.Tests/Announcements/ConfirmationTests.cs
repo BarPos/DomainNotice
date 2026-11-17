@@ -328,6 +328,48 @@ public class ConfirmationTests(PostgresFixture pg)
     }
 
     [Fact]
+    public async Task Csv_uses_semicolon_when_the_language_is_polish()
+    {
+        await using var h = await AnnouncementHarness.CreateAsync(pg);
+        var s = await ShownAsync(h);
+        h.Time.Advance(TimeSpan.FromMinutes(1));
+        Assert.True((await h.ConfirmAsync(s.Conn, s.Show.DeliveryId, s.Button, Answer(s.Q(0), 0), Answer(s.Q(1), 0, 1))).Result.Accepted);
+        var language = new FixedLanguage(AppLanguages.Polish);
+        var export = new ResultsExport(h.Db, language);
+
+        var confirmations = Lines(await export.ExportConfirmationsCsvAsync(s.AnnouncementId, h.Ct));
+        Assert.Equal("Announcement;User;Computer;Time;Button", confirmations[0]);
+        Assert.StartsWith(@"Survey;CORP\alice;PC-ONE;", confirmations[1]);
+        Assert.EndsWith(";OK", confirmations[1]);
+        var answers = Lines(await export.ExportAnswersCsvAsync(s.AnnouncementId, h.Ct));
+        Assert.Equal("User;Computer;Time;Question;Selected options", answers[0]);
+        // Joined options contain "; " and are quoted, so they stay one cell.
+        Assert.EndsWith(";\"Pick many, \"\"quoted\"\"\";\"X; Y, with comma\"", answers[2]);
+
+        // Read per export: switching back to English gives commas again.
+        language.Current = AppLanguages.English;
+        Assert.Equal("Announcement,User,Computer,Time,Button", Lines(await export.ExportConfirmationsCsvAsync(s.AnnouncementId, h.Ct))[0]);
+    }
+
+    [Fact]
+    public void Csv_field_keeps_a_hostile_value_in_one_cell_with_either_separator()
+    {
+        Assert.Equal("\"x;=cmd|' /C calc'!A0;\"", ResultsExport.CsvField("x;=cmd|' /C calc'!A0;"));
+        Assert.Equal("\"'=HYPERLINK(\"\"http://x\"\";\"\"y\"\")\"", ResultsExport.CsvField("=HYPERLINK(\"http://x\";\"y\")"));
+        Assert.Equal("'+1", ResultsExport.CsvField("+1"));
+        Assert.Equal("'@x", ResultsExport.CsvField("@x"));
+        Assert.Equal("\"'\rx\"", ResultsExport.CsvField("\rx"));
+        Assert.Equal("\" padded \"", ResultsExport.CsvField(" padded "));
+    }
+
+    private sealed class FixedLanguage(string current) : IAppLanguage
+    {
+        public string Current { get; set; } = current;
+        public Task<OperationResult> SetAsync(string language, string actor, CancellationToken ct = default) => throw new NotSupportedException();
+        public event Action<string>? Changed { add { } remove { } }
+    }
+
+    [Fact]
     public void Csv_field_escaping()
     {
         Assert.Equal("plain", ResultsExport.CsvField("plain"));

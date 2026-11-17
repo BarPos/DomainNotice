@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Linq.Expressions;
-using System.Text;
+using DomainNotice.Server.Common;
 using DomainNotice.Server.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -35,7 +35,16 @@ public interface IGridList
     /// <summary>Scope keys this list reads from the URL (unprefixed).</summary>
     IReadOnlyList<string> ScopeKeys { get; }
     IReadOnlyList<GridFieldInfo> GetFields(GridContext ctx);
-    Task<byte[]> ExportCsvAsync(GridContext ctx, GridQuery query, CancellationToken ct = default);
+    Task<byte[]> ExportCsvAsync(GridContext ctx, GridQuery query, CsvStyle style, CancellationToken ct = default);
+}
+
+/// <summary>
+/// How a grid CSV is written: the field separator (<see cref="CsvFormat.SeparatorFor"/>) and the header labels
+/// (translated before writing; list labels are English in the list definitions).
+/// </summary>
+public sealed record CsvStyle(char Separator, Func<string, string>? Label = null)
+{
+    public static readonly CsvStyle Default = new(CsvFormat.Comma);
 }
 
 public interface IGridList<TRow> : IGridList
@@ -99,12 +108,14 @@ public abstract class GridList<TSource, TRow> : IGridList<TRow>
     }
 
     /// <summary>CSV of the whole filtered result (not just the page), UTF-8 with BOM, visible columns only.</summary>
-    public async Task<byte[]> ExportCsvAsync(GridContext ctx, GridQuery query, CancellationToken ct = default)
+    public async Task<byte[]> ExportCsvAsync(GridContext ctx, GridQuery query, CsvStyle style, CancellationToken ct = default)
     {
         var q = await BuildQueryAsync(ctx, query);
         var rows = await q.Take(MaxExportRows).Select(Projection(ctx)).ToListAsync(ct);
         var columns = VisibleColumns(query);
-        return Csv.Write(columns.Select(c => c.Label), rows.Select(r => columns.Select(c => Csv.Format(c.Value(r), c.Kind))));
+        var label = style.Label ?? (l => l);
+        return Csv.Write(columns.Select(c => label(c.Label)), rows.Select(r => columns.Select(c => Csv.Format(c.Value(r), c.Kind))),
+            style.Separator);
     }
 
     public IReadOnlyList<GridColumn<TRow>> VisibleColumns(GridQuery query) =>
@@ -162,14 +173,12 @@ public static class GridEngine
 
 public static class Csv
 {
-    /// <summary>UTF-8 with BOM, CRLF lines. Cells that a spreadsheet would run as a formula get a leading apostrophe.</summary>
-    public static byte[] Write(IEnumerable<string> header, IEnumerable<IEnumerable<string>> rows)
-    {
-        var sb = new StringBuilder();
-        sb.Append(string.Join(',', header.Select(Escape))).Append("\r\n");
-        foreach (var row in rows) sb.Append(string.Join(',', row.Select(Escape))).Append("\r\n");
-        return [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes(sb.ToString())];
-    }
+    /// <summary>
+    /// UTF-8 with BOM, CRLF lines, <paramref name="separator"/> between fields (see <see cref="CsvFormat"/>). Cells that a
+    /// spreadsheet would run as a formula get a leading apostrophe.
+    /// </summary>
+    public static byte[] Write(IEnumerable<string> header, IEnumerable<IEnumerable<string>> rows, char separator = CsvFormat.Comma) =>
+        CsvFormat.Write(separator, header, rows);
 
     public static string Format(object? value, ColumnKind kind) => value switch
     {
@@ -181,10 +190,4 @@ public static class Csv
         IEnumerable<string> many => string.Join("; ", many),
         _ => value.ToString() ?? "",
     };
-
-    private static string Escape(string cell)
-    {
-        if (cell.Length > 0 && cell[0] is '=' or '+' or '-' or '@' or '\t' or '\r') cell = "'" + cell;
-        return cell.IndexOfAny([',', '"', '\r', '\n']) >= 0 ? "\"" + cell.Replace("\"", "\"\"") + "\"" : cell;
-    }
 }

@@ -29,5 +29,17 @@ These are never pruned:
 A re-imaged PC has a new key, so it enrols as a new record.
 - If it proves the same AD computer with Kerberos, the old record is marked *replaced* automatically. The computer's
   details page then shows both records' history together.
+- Exception: when the old record has a Kerberos-proven link itself and was online within the last 7 days, a proof
+  alone does not replace it (another key on a running PC is more likely an attack than a reinstall). The newcomer
+  waits in **Computers → Awaiting approval**; choose *Replace the old computer* there for a real reinstall. The next
+  proof (at the agent's next connect) then links it as Proven.
 - Without a proof it waits in **Computers → Awaiting approval** until an admin chooses *Replace the old computer*,
   *Keep both* or *Revoke*.
+
+## Limits per computer
+
+- At most `Agents:MaxNewSessionUsersPerHour` (default 50) user names per hour that the computer never reported before
+  (no logon history on it). Sessions of further new users are ignored for that hour: they are not stored and get no
+  announcements. Users seen before are not limited. Raise the value for terminal servers with many first-time users.
+- At most `Agents:MaxNameChangesPerHour` (default 10) name changes per hour; further names are ignored for that hour.
+- Status messages are applied at most every 5 seconds per connection; the latest one wins.

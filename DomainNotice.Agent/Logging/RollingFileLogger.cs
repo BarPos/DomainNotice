@@ -2,15 +2,20 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Threading.Channels;
+using DomainNotice.Agent.Logic;
+using DomainNotice.Agent.Platform;
 
 namespace DomainNotice.Agent.Logging;
 
 /// <summary>
 /// Small rolling file logger: <c>agent.log</c>, rolled to <c>agent.1.log</c> … <c>agent.N.log</c> at a size limit
 /// (plan 5.4). Writes happen on a background task so logging never blocks the link; failures are swallowed.
+/// Before opening or rolling a file it checks that the logs folder (and the data root) is still a real, secured
+/// folder and the log file is not a link; otherwise file logging stops for good (the Event Log still gets warnings).
 /// </summary>
 public sealed class RollingFileLoggerProvider : ILoggerProvider
 {
+    private readonly AgentPaths _paths;
     private readonly string _directory;
     private readonly string _baseName;
     private readonly long _maxBytes;
@@ -20,9 +25,12 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
     private readonly ConcurrentDictionary<string, RollingFileLogger> _loggers = new(StringComparer.Ordinal);
     private readonly Task _writer;
 
-    public RollingFileLoggerProvider(string directory, string baseName = "agent", long maxBytes = 5 * 1024 * 1024, int keep = 10)
+    private volatile bool _disabled;
+
+    public RollingFileLoggerProvider(AgentPaths paths, string baseName = "agent", long maxBytes = 5 * 1024 * 1024, int keep = 10)
     {
-        _directory = directory;
+        _paths = paths;
+        _directory = paths.Logs;
         _baseName = baseName;
         _maxBytes = maxBytes;
         _keep = keep;
@@ -32,7 +40,10 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
     public ILogger CreateLogger(string categoryName) =>
         _loggers.GetOrAdd(categoryName, name => new RollingFileLogger(name, this));
 
-    internal void Enqueue(string line) => _queue.Writer.TryWrite(line);
+    internal void Enqueue(string line)
+    {
+        if (!_disabled) _queue.Writer.TryWrite(line);
+    }
 
     private string CurrentPath => Path.Combine(_directory, _baseName + ".log");
 
@@ -43,6 +54,12 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
         {
             while (await _queue.Reader.WaitToReadAsync().ConfigureAwait(false))
             {
+                if (_disabled)
+                {
+                    while (_queue.Reader.TryRead(out _)) { }
+                    continue;
+                }
+
                 try
                 {
                     writer ??= Open();
@@ -59,6 +76,12 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
                     }
                     writer.Flush();
                 }
+                catch (UnsafeFolderException)
+                {
+                    writer?.Dispose();
+                    writer = null;
+                    _disabled = true;
+                }
                 catch (Exception)
                 {
                     writer?.Dispose();
@@ -73,15 +96,25 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
         }
     }
 
+    /// <summary>Throws when the folder or the given files are no longer safe to write as SYSTEM.</summary>
+    private void EnsureSafe(params string[] files)
+    {
+        if (_paths.CheckInUse(_directory) is { } problem) throw new UnsafeFolderException(problem);
+        foreach (var file in files)
+            if (FolderGuard.IsLink(file)) throw new UnsafeFolderException($"{file} is a link.");
+    }
+
     private StreamWriter Open()
     {
-        System.IO.Directory.CreateDirectory(_directory);
+        // No CreateDirectory: the folder is created and secured at start; a missing one is not re-created here.
+        EnsureSafe(CurrentPath);
         var stream = new FileStream(CurrentPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
         return new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = false };
     }
 
     private void Roll()
     {
+        EnsureSafe();
         var oldest = Path.Combine(_directory, $"{_baseName}.{_keep}.log");
         if (File.Exists(oldest)) File.Delete(oldest);
         for (var i = _keep - 1; i >= 1; i--)
@@ -103,6 +136,8 @@ public sealed class RollingFileLoggerProvider : ILoggerProvider
         {
         }
     }
+
+    private sealed class UnsafeFolderException(string message) : IOException(message);
 
     private sealed class RollingFileLogger(string category, RollingFileLoggerProvider provider) : ILogger
     {

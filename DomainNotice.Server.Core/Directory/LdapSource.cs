@@ -40,4 +40,6 @@ public interface ILdapSourceSession : IAsyncDisposable
     /// is set, only objects with uSNChanged greater than it. Throws if any page fails.
     /// </summary>
     IAsyncEnumerable<LdapDirectoryEntry> SearchObjectsAsync(long? usnChangedAfter, CancellationToken ct);
+    /// <summary>NetBIOS name of the domain of BaseDn (<see cref="DomainNetBiosName"/>); null when it cannot be read.</summary>
+    Task<string?> ReadNetBiosNameAsync(CancellationToken ct) => Task.FromResult<string?>(null);
 }

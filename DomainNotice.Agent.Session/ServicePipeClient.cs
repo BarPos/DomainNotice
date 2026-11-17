@@ -7,14 +7,18 @@ using DomainNotice.Shared.Protocol;
 namespace DomainNotice.Agent.Session;
 
 /// <summary>
-/// Connects to the service pipe of this session (<c>DomainNotice.Agent.Session.&lt;sessionId&gt;</c>) and keeps
-/// reconnecting. The pipe must be owned by SYSTEM, which only the service can arrange; a pipe created by
-/// another user-level process (squatting) is refused. Events are raised on a background thread.
+/// Connects to the service pipe of this session (<c>DomainNotice.Agent.Session.&lt;sessionId&gt;.&lt;suffix&gt;</c>, the
+/// suffix given by the service on the command line) and keeps reconnecting. The pipe must be owned by SYSTEM, which
+/// only the service can arrange; a pipe created by another user-level process (squatting) is refused. Events are
+/// raised on a background thread.
 /// </summary>
 internal sealed class ServicePipeClient
 {
     private static readonly SecurityIdentifier LocalSystem = new(WellKnownSidType.LocalSystemSid, null);
+    private readonly string _pipeSuffix;
     private volatile LocalMessageStream? _stream;
+
+    public ServicePipeClient(string pipeSuffix) => _pipeSuffix = pipeSuffix;
 
     public event Action<ILocalPayload>? MessageReceived;
     public event Action<bool>? ConnectionChanged;
@@ -23,7 +27,7 @@ internal sealed class ServicePipeClient
 
     public async Task RunAsync(CancellationToken ct)
     {
-        var name = LocalPipe.NameFor(System.Diagnostics.Process.GetCurrentProcess().SessionId);
+        var name = LocalPipe.NameFor(System.Diagnostics.Process.GetCurrentProcess().SessionId, _pipeSuffix);
         while (!ct.IsCancellationRequested)
         {
             try

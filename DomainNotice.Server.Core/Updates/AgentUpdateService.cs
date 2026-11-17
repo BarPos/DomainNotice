@@ -99,7 +99,7 @@ internal sealed class AgentUpdateService(
         var package = await packages.GetCurrentAsync(ct);
         if (package is null)
             return (OperationResult.Fail($"The agent package for version {AppVersion.Current} is not in the cache. " +
-                                         "Check for updates, or import a locally built MSI in Settings."), 0);
+                                         "It is downloaded from the GitHub release on \"Check now\" (Settings, About and updates)."), 0);
 
         var ids = computerIds.Distinct().ToList();
         var created = new List<AgentUpdateTask>();

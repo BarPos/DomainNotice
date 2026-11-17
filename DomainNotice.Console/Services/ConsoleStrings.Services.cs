@@ -75,8 +75,8 @@ internal static partial class ConsoleStrings
         d["The directory is not configured (Directory:Hosts and Directory:BaseDn)."] = "Katalog nie jest skonfigurowany (Directory:Hosts i Directory:BaseDn).";
 
         // Updates/AgentUpdateService
-        d[$"The agent package for version {AppVersion.Current} is not in the cache. Check for updates, or import a locally built MSI in Settings."] =
-            $"Pakietu agenta dla wersji {AppVersion.Current} nie ma w pamięci podręcznej. Sprawdź aktualizacje albo zaimportuj lokalnie zbudowany plik MSI w Ustawieniach.";
+        d[$"The agent package for version {AppVersion.Current} is not in the cache. It is downloaded from the GitHub release on \"Check now\" (Settings, About and updates)."] =
+            $"Pakietu agenta dla wersji {AppVersion.Current} nie ma w pamięci podręcznej. Zostanie pobrany z wydania w GitHub po kliknięciu „Sprawdź teraz” (Ustawienia, Informacje i aktualizacje).";
         d["Update task not found."] = "Nie znaleziono zadania aktualizacji.";
         d["The task is already Done."] = "Zadanie jest już zakończone.";
         d["The task is already Failed."] = "Zadanie już się nie powiodło.";
@@ -84,8 +84,6 @@ internal static partial class ConsoleStrings
         d["The agent reported a failure."] = "Agent zgłosił błąd.";
 
         // Updates/AgentPackageCache
-        d["Choose an .msi file."] = "Wybierz plik .msi.";
-        d["The file is not an MSI package (no OLE compound file signature)."] = "Plik nie jest pakietem MSI (brak sygnatury pliku złożonego OLE).";
         d["Updates are not configured."] = "Aktualizacje nie są skonfigurowane.";
 
         // Updates/ServerUpdateService and ServerInstallation

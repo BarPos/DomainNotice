@@ -53,12 +53,18 @@ public enum ChunkResult
     TooLarge,
 }
 
-public sealed record VerifyResult(bool Ok, string? Error);
+/// <summary>
+/// Outcome of <see cref="PackageDownload.Verify"/>. On success <see cref="Package"/> is the verified package, open for
+/// reading with read-only sharing: while it is open nobody can write, replace or delete the file. The caller keeps it
+/// open until msiexec has been started, then disposes it.
+/// </summary>
+public sealed record VerifyResult(bool Ok, string? Error, FileStream? Package = null);
 
 /// <summary>
 /// Assembles an update package from binary chunks into <c>&lt;dir&gt;\&lt;taskId&gt;.part</c>, resuming from the
-/// bytes already on disk, then checks size and SHA-256 and renames it to <c>&lt;taskId&gt;.msi</c> (plan 11.3).
-/// Not thread-safe; the server link reads frames one at a time.
+/// bytes already on disk, then renames it to <c>&lt;taskId&gt;.msi</c>, opens that without write or delete sharing and
+/// checks size and SHA-256 from the open handle (plan 11.3), so what was checked is what msiexec reads. Junctions or
+/// links in place of the folder or the files are refused. Not thread-safe; the server link reads frames one at a time.
 /// </summary>
 public sealed class PackageDownload : IDisposable
 {
@@ -95,7 +101,10 @@ public sealed class PackageDownload : IDisposable
     public static PackageDownload OpenOrResume(string directory, UpdateAgent command)
     {
         System.IO.Directory.CreateDirectory(directory);
+        if (FolderGuard.CheckDirectories(directory) is { } problem) throw new IOException(problem);
         var download = new PackageDownload(command, directory);
+        RemoveLink(download.PartPath);
+        RemoveLink(download.PackagePath);
         if (File.Exists(download.PackagePath))
         {
             // Verified earlier (e.g. the install was interrupted): move it back for a fresh check.
@@ -122,31 +131,46 @@ public sealed class PackageDownload : IDisposable
     }
 
     /// <summary>
-    /// Checks size and SHA-256. On success the file is renamed to <see cref="PackagePath"/>; on a mismatch it is
-    /// deleted so the next attempt starts over.
+    /// Renames the file to <see cref="PackagePath"/>, opens it with <see cref="FileShare.Read"/> only and checks size
+    /// and SHA-256 from that handle. On success the open handle is returned in <see cref="VerifyResult.Package"/>
+    /// (dispose it after msiexec started); on any failure the file is deleted so the next attempt starts over.
     /// </summary>
     public VerifyResult Verify()
     {
         CloseFile();
-        var info = new FileInfo(PartPath);
-        if (!info.Exists || info.Length != Size)
-        {
-            Discard();
-            return new VerifyResult(false, $"Package size is {(info.Exists ? info.Length : 0)} bytes, expected {Size}.");
-        }
+        var directory = Path.GetDirectoryName(PartPath)!;
+        if (FolderGuard.CheckDirectories(directory) is { } problem) return Fail(problem);
+        if (FolderGuard.IsLink(PartPath)) return Fail($"{PartPath} is a link.");
+        if (!File.Exists(PartPath)) return Fail($"Package size is 0 bytes, expected {Size}.");
 
-        string actual;
-        using (var stream = new FileStream(PartPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            actual = Convert.ToHexStringLower(SHA256.HashData(stream));
-
-        if (!string.Equals(actual, Sha256, StringComparison.Ordinal))
-        {
-            Discard();
-            return new VerifyResult(false, $"Package SHA-256 is {actual}, expected {Sha256}.");
-        }
-
+        // Rename first, then open without write/delete sharing: from here on the content cannot change under us.
         File.Move(PartPath, PackagePath, overwrite: true);
-        return new VerifyResult(true, null);
+        FileStream? package = null;
+        try
+        {
+            package = new FileStream(PackagePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (FolderGuard.IsLink(PackagePath)) return Fail($"{PackagePath} is a link.", package);
+            if (package.Length != Size) return Fail($"Package size is {package.Length} bytes, expected {Size}.", package);
+
+            var actual = Convert.ToHexStringLower(SHA256.HashData(package));
+            if (!string.Equals(actual, Sha256, StringComparison.Ordinal))
+                return Fail($"Package SHA-256 is {actual}, expected {Sha256}.", package);
+
+            package.Seek(0, SeekOrigin.Begin);
+            return new VerifyResult(true, null, package);
+        }
+        catch
+        {
+            package?.Dispose();
+            throw;
+        }
+    }
+
+    private VerifyResult Fail(string error, FileStream? open = null)
+    {
+        open?.Dispose();
+        Discard();
+        return new VerifyResult(false, error);
     }
 
     /// <summary>Deletes the partial file (and a verified package, if any).</summary>
@@ -161,7 +185,8 @@ public sealed class PackageDownload : IDisposable
     /// <summary>Deletes leftovers of other tasks (and files older than <paramref name="maxAge"/>) in the folder.</summary>
     public static void CleanFolder(string directory, Guid? keepTaskId, TimeSpan maxAge, DateTime nowUtc)
     {
-        if (!System.IO.Directory.Exists(directory)) return;
+        // Never through a junction or link: that would delete files somewhere else.
+        if (FolderGuard.CheckDirectories(directory) is not null) return;
         foreach (var path in System.IO.Directory.EnumerateFiles(directory))
         {
             var name = Path.GetFileNameWithoutExtension(path);
@@ -177,6 +202,12 @@ public sealed class PackageDownload : IDisposable
     {
         _file?.Dispose();
         _file = null;
+    }
+
+    /// <summary>Deletes a link at <paramref name="path"/> (the link only), so it is never written through.</summary>
+    private static void RemoveLink(string path)
+    {
+        if (FolderGuard.IsLink(path)) FolderGuard.DeleteTree(path);
     }
 
     private static void TryDelete(string path)

@@ -13,6 +13,13 @@ public sealed class ConsoleOptions
     public string CertificateKey { get; set; } = "";
     /// <summary>Optional: trust X-Forwarded-* headers (only needed when something forwards requests to the Console).</summary>
     public ForwardedHeadersSettings ForwardedHeaders { get; set; } = new();
+    /// <summary>
+    /// Absolute session lifetime in hours: a Console session ends this long after sign-in even while in use (the
+    /// cookie also expires after 8 hours without activity). Values below 1 count as 1.
+    /// </summary>
+    public int SessionMaxHours { get; set; } = 12;
+
+    public TimeSpan SessionMaxLifetime => TimeSpan.FromHours(Math.Max(1, SessionMaxHours));
 }
 
 /// <summary>
@@ -48,7 +55,20 @@ public sealed class AgentsOptions
     /// <summary>Address to listen on. Not in plan section 12; defaults to all interfaces.</summary>
     public string ListenAddress { get; set; } = "0.0.0.0";
     public int OfflineAfterSeconds { get; set; } = 90;
+    /// <summary>Largest frame in either direction (update chunks must fit). The read limits below are lower.</summary>
     public int MaxMessageBytes { get; set; } = ProtocolInfo.DefaultMaxFrameBytes;
+    /// <summary>Largest frame accepted from an enrolled agent (Hello, Status, ProveIdentity, Confirm, ...).</summary>
+    public int MaxInboundMessageBytes { get; set; } = 512 * 1024;
+    /// <summary>Largest frame accepted from a key that is not enrolled (only Enroll is allowed).</summary>
+    public int MaxEnrolMessageBytes { get; set; } = 64 * 1024;
+    /// <summary>Agent connections open at once; further connections are closed right after accept.</summary>
+    public int MaxConnections { get; set; } = 20_000;
+    /// <summary>Connections from one IP address that have not completed Hello yet (TLS, enrolment).</summary>
+    public int MaxPendingConnectionsPerIp { get; set; } = 64;
+    /// <summary>New user names one computer may report per hour; more are ignored (0 = no limit).</summary>
+    public int MaxNewSessionUsersPerHour { get; set; } = 50;
+    /// <summary>Computer name changes one computer may report per hour; more are ignored (0 = no limit).</summary>
+    public int MaxNameChangesPerHour { get; set; } = 10;
     public int UpdateTimeoutMinutes { get; set; } = 30;
     public int MaxParallelUpdates { get; set; } = 50;
     /// <summary>Total bandwidth cap for package transfers; 0 = unlimited.</summary>
@@ -94,6 +114,9 @@ public sealed class HistoryOptions
 {
     public const string Section = "History";
     public int RetentionDays { get; set; } = 30;
+    /// <summary>Failed sign-in audit rows ("sign-in.failed") are deleted after this many days; &lt;= 0 keeps them.
+    /// All other audit entries are kept.</summary>
+    public int FailedSignInRetentionDays { get; set; } = 90;
 }
 
 public enum DirectorySecurity

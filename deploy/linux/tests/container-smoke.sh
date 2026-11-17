@@ -70,8 +70,12 @@ check "update.env 600 root"          mode_owner "$R/config/update.env" "600 root
 check "data 700"                     mode_owner "$R/data" "700 domainnotice:domainnotice"
 check "data/updates 700"             mode_owner "$R/data/updates" "700 domainnotice:domainnotice"
 check "data/keys/dataprotection"     mode_owner "$R/data/keys/dataprotection" "700 domainnotice:domainnotice"
-check "backups 700"                  mode_owner "$R/backups" "700 domainnotice:domainnotice"
+check "backups root-only"            mode_owner "$R/backups" "700 root:root"
+check "backups/pre-update root-only" mode_owner "$R/backups/pre-update" "700 root:root"
 check "bin/update.sh root 755"       mode_owner "$R/bin/update.sh" "755 root:root"
+check "package has this update.sh (rebuild it otherwise)" cmp -s /src/update.sh "$R/bin/update.sh"
+check "package has this backup.sh"   cmp -s /src/backup.sh "$R/bin/backup.sh"
+check "service unit: backups not writable" bash -c "grep -q '^ReadWritePaths=/opt/domainnotice/data$' /etc/systemd/system/domainnotice.service"
 for u in domainnotice.service domainnotice-update.path domainnotice-update.service; do
     check "unit $u installed"        mode_owner "/etc/systemd/system/$u" "644 root:root"
 done
@@ -104,15 +108,27 @@ result() { sed -n "s/^$1=//p" "$R/data/updates/result.conf"; }
 PGPASSWORD="$pw" psql -X -q -h 127.0.0.1 -U domainnotice -d domainnotice -c "create table smoke_marker(v text); insert into smoke_marker values ('before')"
 
 # 1) Rollback: nothing answers on /healthz in the container, so update.sh must roll back.
+#    Also: an install from before 1.0.5 (backups/ owned by the service user, which planted links in it) and a
+#    result.conf that is a link to a root file: neither link may be followed by root.
 sed -i 's/^HEALTH_TIMEOUT_SECONDS=.*/HEALTH_TIMEOUT_SECONDS=6/' "$R/bin/update.sh"
+echo 'victim' >/etc/dn-victim; chmod 644 /etc/dn-victim
+mkdir -m 700 /etc/dn-victim-dir
+rm -rf "$R/backups/pre-update"; chown domainnotice:domainnotice "$R/backups"
+runuser -u domainnotice -- ln -s /etc/dn-victim-dir "$R/backups/pre-update"
+runuser -u domainnotice -- ln -s /etc/dn-victim "$R/data/updates/result.conf"
 stage 9.0.1
 "$R/bin/update.sh" >/tmp/update1.log 2>&1
 check "rollback: exit status non-zero"  [ $? -ne 0 ]
 check "rollback: request consumed"      [ ! -e "$R/data/updates/request.conf" ]
 check "rollback: result RolledBack"     [ "$(result state)" == RolledBack ]
 check "rollback: current switched back" [ "$(readlink $R/current)" == "$R/releases/$version" ]
-check "rollback: backup written"        [ -n "$(ls $R/backups/*.dump 2>/dev/null)" ]
-check "rollback: backup root 600"       mode_owner "$(ls $R/backups/*.dump | head -n1)" "600 root:root"
+check "rollback: old backups/ taken over by root" mode_owner "$R/backups" "700 root:root"
+check "rollback: planted pre-update link replaced" mode_owner "$R/backups/pre-update" "700 root:root"
+check "rollback: nothing written behind the link" [ -z "$(ls -A /etc/dn-victim-dir)" ]
+check "rollback: backup written"        [ -n "$(ls $R/backups/pre-update/*.dump 2>/dev/null)" ]
+check "rollback: backup root 600"       mode_owner "$(ls $R/backups/pre-update/*.dump | head -n1)" "600 root:root"
+check "result.conf link: target untouched" bash -c "[ \"\$(cat /etc/dn-victim)\" == victim ] && [ \"\$(stat -c '%a %U' /etc/dn-victim)\" == '644 root' ]"
+check "result.conf link: replaced by a file" bash -c "[ -f $R/data/updates/result.conf ] && [ ! -L $R/data/updates/result.conf ]"
 check "rollback: database restored"     [ "$(PGPASSWORD="$pw" psql -X -At -h 127.0.0.1 -U domainnotice -d domainnotice -c 'select v from smoke_marker')" == before ]
 check "rollback: result readable by service" mode_owner "$R/data/updates/result.conf" "600 domainnotice:domainnotice"
 check "rollback: new release unpacked as root" mode_owner "$R/releases/9.0.1" "755 root:root"
@@ -146,18 +162,48 @@ check "success: work folder removed"    [ -z "$(find "$R/releases" -maxdepth 1 -
 # 4) install.sh --upgrade uses the same path (staging + update unit); a downgrade is refused.
 out="$(bash /src/install.sh --unattended --upgrade --package "$pkg" 2>&1)"
 check "install.sh --upgrade refuses a downgrade" grep -q 'is not newer' <<<"$out"
+#    An upgrade stages the package as the service user (root never writes into data/updates by path).
+mkdir -p /root/up && cp "$pkg" "/root/up/DomainNotice.Server-9.0.3-linux-$arch.tar.gz"
+printf '{"status":"ok","version":"9.0.3"}' >/tmp/healthz.json
+(cd /root && bash /src/install.sh --unattended --upgrade --package "/root/up/DomainNotice.Server-9.0.3-linux-$arch.tar.gz") >/tmp/upgrade.log 2>&1
+check "install.sh --upgrade: exit 0"        [ $? -eq 0 ]
+check "install.sh --upgrade: current -> 9.0.3" [ "$(readlink $R/current)" == "$R/releases/9.0.3" ]
+check "install.sh --upgrade: staged by the service user" mode_owner "$R/data/updates/9.0.3/DomainNotice.Server-9.0.3-linux-$arch.tar.gz" "600 domainnotice:domainnotice"
+check "install.sh --upgrade: result Succeeded" [ "$(result state)" == Succeeded ]
+[ "$(readlink $R/current)" == "$R/releases/9.0.3" ] || tail -n 20 /tmp/upgrade.log | sed 's/^/     /'
 
-# 5) --repair keeps config and data, fixes modes, re-installs units and update.sh.
+# 5) --repair keeps config and data and fixes modes. Root-run files (bin/, units) never come from current/ (which
+#    a self-update staged by the service user decides): without a package the installed copies are kept, with
+#    --package they are reinstalled from it.
 cfg_sum="$(sha256sum "$R/config/appsettings.Production.json")"
 chmod 644 "$R/config/appsettings.Production.json"
 chmod 755 "$R/data"
-rm -f "$R/bin/update.sh"
+bin_sum="$(sha256sum "$R/bin/update.sh" | cut -c1-64)"
+unit_sum="$(sha256sum /etc/systemd/system/domainnotice-update.service | cut -c1-64)"
+printf '\ntouch /tmp/dn-pwned-by-current\n' >>"$R/current/deploy/linux/update.sh"
+sed -i 's|^ExecStart=.*|ExecStart=/tmp/dn-evil|' "$R/current/deploy/linux/domainnotice-update.service"
+chown domainnotice:domainnotice "$R/backups"; ln -s /etc/dn-victim "$R/backups/planted-link"
+rm -rf "$R/data/packages"; runuser -u domainnotice -- ln -s /etc/dn-victim-dir "$R/data/packages"
 bash /src/install.sh --unattended --repair >/tmp/repair.log 2>&1
 check "repair: exit 0"                  [ $? -eq 0 ]
+check "repair: link in data/ not followed" mode_owner /etc/dn-victim-dir "700 root:root"
+rm -f "$R/data/packages"; install -d -o domainnotice -g domainnotice -m 700 "$R/data/packages" "$R/data/packages/agent"
 check "repair: config unchanged"        [ "$(sha256sum "$R/config/appsettings.Production.json")" == "$cfg_sum" ]
 check "repair: config mode restored"    mode_owner "$R/config/appsettings.Production.json" "640 root:domainnotice"
 check "repair: data mode restored"      mode_owner "$R/data" "700 domainnotice:domainnotice"
-check "repair: update.sh restored"      mode_owner "$R/bin/update.sh" "755 root:root"
+check "repair: tampered current/ update.sh not installed" [ "$(sha256sum "$R/bin/update.sh" | cut -c1-64)" == "$bin_sum" ]
+check "repair: tampered current/ unit not installed" [ "$(sha256sum /etc/systemd/system/domainnotice-update.service | cut -c1-64)" == "$unit_sum" ]
+check "repair: backups taken back by root" mode_owner "$R/backups" "700 root:root"
+check "repair: link in backups kept, not followed" bash -c "[ -L $R/backups/planted-link ] && [ \"\$(stat -c '%a %U' /etc/dn-victim)\" == '644 root' ]"
+rm -f "$R/bin/update.sh"
+bash /src/install.sh --unattended --repair >/tmp/repair2.log 2>&1
+check "repair: missing update.sh needs a package" bash -c "[ $? -ne 0 ] && grep -q 'bin/update.sh' /tmp/repair2.log && [ ! -e $R/bin/update.sh ]"
+bash /src/install.sh --unattended --repair --package "$pkg" >/tmp/repair3.log 2>&1
+check "repair --package: exit 0"        [ $? -eq 0 ]
+check "repair --package: update.sh from the package" cmp -s /src/update.sh "$R/bin/update.sh"
+check "repair --package: update.sh root 755" mode_owner "$R/bin/update.sh" "755 root:root"
+check "repair --package: unit from the package" cmp -s /src/domainnotice-update.service /etc/systemd/system/domainnotice-update.service
+check "tampered update.sh never ran"    [ ! -e /tmp/dn-pwned-by-current ]
 
 # 6) --uninstall --keep-data keeps config, data and the database; --uninstall (alias --purge) removes everything.
 bash /src/install.sh --uninstall --keep-data >/tmp/uninstall.log 2>&1

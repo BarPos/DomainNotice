@@ -17,10 +17,12 @@ internal static class SessionUiLauncher
 
     /// <summary>
     /// WTSQueryUserToken + CreateEnvironmentBlock + CreateProcessAsUser on <c>winsta0\default</c>. The token from
-    /// WTSQueryUserToken is the user's normal (filtered, non-elevated) token.
+    /// WTSQueryUserToken is the user's normal (filtered, non-elevated) token. The command line carries
+    /// <c>--pipe &lt;suffix&gt;</c>, the per-start pipe suffix; this is the only place that starts the Session UI.
     /// </summary>
-    public static Process Start(int sessionId)
+    public static Process Start(int sessionId, string pipeSuffix)
     {
+        if (!LocalPipe.IsValidSuffix(pipeSuffix)) throw new ArgumentException("Invalid pipe suffix.", nameof(pipeSuffix));
         var exe = ExecutablePath;
         if (!File.Exists(exe)) throw new FileNotFoundException("Session UI executable not found.", exe);
 
@@ -38,7 +40,7 @@ internal static class SessionUiLauncher
                 cb = Marshal.SizeOf<NativeMethods.StartupInfo>(),
                 lpDesktop = @"winsta0\default",
             };
-            var commandLine = new StringBuilder($"\"{exe}\"");
+            var commandLine = new StringBuilder($"\"{exe}\" {LocalPipe.SuffixArgument} {pipeSuffix}");
             if (!NativeMethods.CreateProcessAsUser(
                     token, exe, commandLine, IntPtr.Zero, IntPtr.Zero, inheritHandles: false,
                     NativeMethods.CreateUnicodeEnvironment, environment, SessionFolder,
@@ -65,7 +67,10 @@ internal static class SessionUiLauncher
         }
     }
 
-    /// <summary>A Session UI that is already running in the session (e.g. after a service restart), if any.</summary>
+    /// <summary>
+    /// A Session UI that is already running in the session but was not started by this service process (left over
+    /// from an earlier start, or started by hand), if any. It cannot know this start's pipe suffix, so it is replaced.
+    /// </summary>
     public static Process? FindRunning(int sessionId)
     {
         Process? found = null;

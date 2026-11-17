@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using DomainNotice.Server.Abstractions;
+using DomainNotice.Server.Common;
 using DomainNotice.Server.Data;
 using DomainNotice.Shared;
 using Microsoft.EntityFrameworkCore;
@@ -36,10 +37,15 @@ public interface IAnnouncementResults
     Task<AnnouncementResultsSummary?> GetSummaryAsync(Guid announcementId, CancellationToken ct = default);
 }
 
-/// <summary>CSV exports, UTF-8 with BOM. Times are server local time "yyyy-MM-dd HH:mm:ss".</summary>
-internal sealed class ResultsExport(IDbContextFactory<AppDbContext> dbFactory) : IResultsExport, IAnnouncementResults
+/// <summary>
+/// CSV exports through <see cref="CsvFormat"/>: UTF-8 with BOM, ';' between fields when the installation language is
+/// Polish, ',' otherwise. Times are server local time "yyyy-MM-dd HH:mm:ss".
+/// </summary>
+internal sealed class ResultsExport(IDbContextFactory<AppDbContext> dbFactory, IAppLanguage? language = null)
+    : IResultsExport, IAnnouncementResults
 {
-    private static readonly Encoding Utf8Bom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+    /// <summary>Read per export, so a language change applies to the next download.</summary>
+    private char Separator => CsvFormat.SeparatorFor(language?.Current);
 
     public async Task<byte[]> ExportConfirmationsCsvAsync(Guid announcementId, CancellationToken ct = default)
     {
@@ -138,29 +144,12 @@ internal sealed class ResultsExport(IDbContextFactory<AppDbContext> dbFactory) :
                 .ToList());
     }
 
-    /// <summary>UTF-8 with BOM (GetBytes alone does not write the preamble).</summary>
-    private static byte[] Encode(StringBuilder sb) => [.. Utf8Bom.GetPreamble(), .. Utf8Bom.GetBytes(sb.ToString())];
+    private static byte[] Encode(StringBuilder sb) => CsvFormat.Encode(sb);
 
-    private static void AppendRow(StringBuilder sb, params string?[] fields)
-    {
-        for (var i = 0; i < fields.Length; i++)
-        {
-            if (i > 0) sb.Append(',');
-            sb.Append(CsvField(fields[i]));
-        }
-        sb.Append("\r\n");
-    }
+    private void AppendRow(StringBuilder sb, params string?[] fields) => CsvFormat.AppendRow(sb, Separator, fields);
 
-    /// <summary>RFC 4180 quoting. Fields starting with = + - @ are prefixed with ' against spreadsheet formula injection.</summary>
-    public static string CsvField(string? value)
-    {
-        value ??= "";
-        if (value.Length > 0 && value[0] is '=' or '+' or '-' or '@' or '\t' or '\r')
-            value = "'" + value;
-        if (value.IndexOfAny(['"', ',', '\n', '\r', ';']) >= 0 || value != value.Trim())
-            return "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
-        return value;
-    }
+    /// <summary>One cell, see <see cref="CsvFormat.Field"/> (formula neutralisation and quoting).</summary>
+    public static string CsvField(string? value) => CsvFormat.Field(value);
 
     private static string Display(DateTime utc)
     {

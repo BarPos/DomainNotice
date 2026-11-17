@@ -10,8 +10,10 @@
 #   format=1  run_id=<guid>  version=<x.y.z>  from_version=<x.y.z>  arch=x64|arm64
 #   file=DomainNotice.Server-<version>-linux-<arch>.tar.gz  sha256=<64 hex>
 # The package and SHA256SUMS.txt are in /opt/domainnotice/data/updates/<version>/.
-# Result (read by the server on start): /opt/domainnotice/data/updates/result.conf
+# Result (read by the server on start): /opt/domainnotice/data/updates/result.conf, written by the service user
+# (root never opens a path in the service user's folders for writing)
 #   format=1  run_id  version  from_version  state=Succeeded|RolledBack|Failed  message  finished_at
+# Database dump before the update: /opt/domainnotice/backups/pre-update/ (root:root 700, only root can write it)
 #
 # Needs /opt/domainnotice/config/update.env (root:root 600, written by install.sh), key=value lines:
 #   PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE  (for pg_dump / pg_restore)
@@ -167,6 +169,19 @@ dn_check_member_types() {
     [[ $n -gt 0 ]] || { DN_ERROR="empty package"; return 1; }
 }
 
+# dn_check_member_modes: reads "tar -tv" output on stdin. Refuses setuid and setgid entries (a backup never needs
+# them, and root would put them back as they are).
+dn_check_member_modes() {
+    local line perm
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        perm="${line%% *}"
+        case "${perm:3:1}${perm:6:1}" in
+            *s*|*S*) DN_ERROR="setuid or setgid entry: ${line##* }"; return 1 ;;
+        esac
+    done
+    return 0
+}
+
 # dn_normalize_relpath PATH: lexically resolves "." and ".." of a relative path. Prints the result (may be
 # empty for the root itself). Fails when the path climbs above its root.
 dn_normalize_relpath() {
@@ -184,14 +199,18 @@ dn_normalize_relpath() {
 }
 
 # dn_check_tree DIR: after unpacking. Only files, folders and symlinks; no hard-linked files; every symlink is
-# relative and stays inside DIR.
+# relative and stays inside DIR: checked on the text of the target, and again with "realpath -m" against the real
+# path of DIR where GNU realpath is available (defence in depth; macOS has no -m).
 dn_check_tree() {
-    local dir="$1" link rel target linkdir
+    local dir="$1" link rel target linkdir real="" resolved
     if [[ -n "$(find "$dir" ! -type f ! -type d ! -type l -print -quit)" ]]; then
         DN_ERROR="special files in package"; return 1
     fi
     if [[ -n "$(find "$dir" -type f -links +1 -print -quit)" ]]; then
         DN_ERROR="hard links in package"; return 1
+    fi
+    if realpath -m / >/dev/null 2>&1; then
+        real="$(realpath -e -- "$dir")" || { DN_ERROR="cannot resolve $dir"; return 1; }
     fi
     while IFS= read -r -d '' link; do
         target="$(readlink "$link")"
@@ -201,6 +220,10 @@ dn_check_tree() {
         [[ "$linkdir" == . ]] && linkdir=""
         if ! dn_normalize_relpath "${linkdir:+$linkdir/}$target" >/dev/null; then
             DN_ERROR="link pointing outside the package: $rel"; return 1
+        fi
+        if [[ -n "$real" ]]; then
+            resolved="$(realpath -m -- "$link" 2>/dev/null)" || { DN_ERROR="cannot resolve link: $rel"; return 1; }
+            [[ "$resolved" == "$real" || "$resolved" == "$real"/* ]] || { DN_ERROR="link pointing outside the package: $rel"; return 1; }
         fi
     done < <(find "$dir" -type l -print0)
     return 0
@@ -254,21 +277,63 @@ dn_releases_to_prune() {
 
 dn_one_line() { printf '%s' "$*" | tr '\r\n\t' '   ' | cut -c1-1500; }
 
+# dn_trusted_dir DIR: sets DN_TRUSTED_DIR to the real path of DIR. Fails unless DIR is a folder (not a symbolic
+# link) that only root can change: DIR and every folder above it owned by root and not writable by group or others
+# (a sticky folder such as /tmp is accepted above DIR, never as DIR). Root can then create files in it without
+# races. Needs GNU stat.
+# shellcheck disable=SC2034 # DN_TRUSTED_DIR is read by the callers (backup.sh)
+dn_trusted_dir() {
+    local dir="$1" path cur uid mode first=1
+    DN_TRUSTED_DIR=""
+    while [[ "$dir" == */ && "$dir" != / ]]; do dir="${dir%/}"; done
+    [[ -d "$dir" && ! -L "$dir" ]] || { DN_ERROR="$dir is not a folder (or is a symbolic link)"; return 1; }
+    path="$(realpath -e -- "$dir")" || { DN_ERROR="cannot resolve $dir"; return 1; }
+    cur="$path"
+    while true; do
+        read -r uid mode < <(stat -c '%u %a' -- "$cur") || { DN_ERROR="cannot read the owner of $cur"; return 1; }
+        [[ "$uid" == 0 ]] || { DN_ERROR="$cur is not owned by root"; return 1; }
+        if (((8#$mode & 8#022) != 0)) && { ((first)) || (((8#$mode & 8#1000) == 0)); }; then
+            DN_ERROR="$cur is writable by other users than root"; return 1
+        fi
+        [[ "$cur" == / ]] && break
+        cur="$(dirname -- "$cur")"
+        first=0
+    done
+    DN_TRUSTED_DIR="$path"
+}
+
+# dn_root_dir DIR [replace-link]: makes DIR a folder owned by root:root with mode 700 (created when missing). Its
+# parent must already be a folder only root can change. A symbolic link at DIR is refused, or with replace-link
+# removed and replaced by a folder. Only DIR itself is changed; links are never followed.
+dn_root_dir() {
+    local dir="$1"
+    if [[ -L "$dir" ]]; then
+        [[ "${2-}" == replace-link ]] || { DN_ERROR="$dir is a symbolic link; make it a real folder"; return 1; }
+        rm -f -- "$dir" || { DN_ERROR="cannot remove the link $dir"; return 1; }
+    fi
+    if [[ ! -e "$dir" ]]; then mkdir -m 700 -- "$dir" || { DN_ERROR="cannot create $dir"; return 1; }; fi
+    [[ -d "$dir" && ! -L "$dir" ]] || { DN_ERROR="$dir is not a folder"; return 1; }
+    { chown -h root:root -- "$dir" && chmod 700 -- "$dir"; } || { DN_ERROR="cannot set the owner of $dir"; return 1; }
+    [[ ! -L "$dir" && "$(stat -c '%u %a' -- "$dir")" == "0 700" ]] || { DN_ERROR="$dir is not root:root 700"; return 1; }
+}
+
 # ------------------------------------------------------------------------------------------------ main (root)
 
 dn_write_result() {
-    # Written in a folder the service user owns: refuse to follow links (noclobber = O_EXCL), chown -h only.
-    local state="$1" message="$2" file="$DN_ROOT/data/updates/result.conf"
+    # data/updates belongs to the service user, so the service user writes the file itself (temp file + rename):
+    # root never opens a path there for writing, and a planted link or FIFO reaches only what that user can reach.
+    local state="$1" message="$2" dir="$DN_ROOT/data/updates"
     local now
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    rm -f -- "$file"
-    if ! ( set -o noclobber; umask 077
-           printf 'format=1\nrun_id=%s\nversion=%s\nfrom_version=%s\nstate=%s\nmessage=%s\nfinished_at=%s\n' \
-               "${REQ_RUN_ID-}" "${REQ_VERSION-}" "${CURRENT_VERSION:-${REQ_FROM-}}" "$state" "$(dn_one_line "$message")" "$now" >"$file" ); then
-        dn_log "cannot write $file"
+    # shellcheck disable=SC2016 # $1 and $t are expanded by the inner shell
+    if ! printf 'format=1\nrun_id=%s\nversion=%s\nfrom_version=%s\nstate=%s\nmessage=%s\nfinished_at=%s\n' \
+            "${REQ_RUN_ID-}" "${REQ_VERSION-}" "${CURRENT_VERSION:-${REQ_FROM-}}" "$state" "$(dn_one_line "$message")" "$now" |
+        runuser -u "$DN_USER" -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 /bin/sh -c \
+            'umask 077; t="$(mktemp "$1/.result.XXXXXX")" || exit 1; if cat >"$t" && mv -fT -- "$t" "$1/result.conf"; then exit 0; fi; rm -f -- "$t"; exit 1' \
+            sh "$dir"; then
+        dn_log "cannot write $dir/result.conf"
         return 0
     fi
-    chown -h "$DN_USER:$DN_USER" -- "$file" 2>/dev/null || true
     dn_log "result: $state - $message"
 }
 
@@ -291,13 +356,25 @@ dn_wait_healthy() {
 
 dn_pg() { local tool="$1"; shift; if [[ -n "${PG_BIN-}" && -x "$PG_BIN/$tool" ]]; then "$PG_BIN/$tool" "$@"; else "$tool" "$@"; fi; }
 
+# dn_prepare_backup_dir: backups/ and backups/pre-update/ as root:root 700, so only root can write there and the
+# dump is created without races. Before 1.0.5 backups/ belonged to the service user: it is taken over here (owner
+# and mode of the folders only; install.sh also fixes what is inside). A link at backups/ is refused (only root can
+# put one there); one at pre-update/ is replaced (the service user could have planted it).
+dn_prepare_backup_dir() {
+    local top="$DN_ROOT/backups"
+    BACKUP_DIR="$top/pre-update"
+    dn_root_dir "$top" || return 1
+    dn_root_dir "$BACKUP_DIR" replace-link
+}
+
 dn_backup_db() {
-    # The backups folder may be writable by the service user: write with O_EXCL so a planted link is refused.
+    # Into the root-only folder from dn_prepare_backup_dir; the name must not exist yet, not even as a link.
     local stamp name
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
     name="domainnotice-${CURRENT_VERSION}-to-${REQ_VERSION}-$stamp.dump"
-    BACKUP_FILE="$DN_ROOT/backups/$name"
-    [[ -d "$DN_ROOT/backups" && ! -L "$DN_ROOT/backups" ]] || return 1
+    BACKUP_FILE="$BACKUP_DIR/$name"
+    [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" && ! -L "$BACKUP_DIR" && "$(stat -c %u -- "$BACKUP_DIR")" == 0 ]] || return 1
+    [[ ! -e "$BACKUP_FILE" && ! -L "$BACKUP_FILE" ]] || return 1
     ( set -o noclobber; umask 077; dn_pg pg_dump --format=custom --no-password >"$BACKUP_FILE" )
 }
 
@@ -363,7 +440,7 @@ dn_on_error() { local line="$1"; trap - ERR; dn_fail "unexpected error in update
 
 dn_main() {
     PHASE=init
-    REQ_RUN_ID="" REQ_VERSION="" REQ_FROM="" CURRENT_VERSION="" PREVIOUS_TARGET="" BACKUP_FILE=""
+    REQ_RUN_ID="" REQ_VERSION="" REQ_FROM="" CURRENT_VERSION="" PREVIOUS_TARGET="" BACKUP_FILE="" BACKUP_DIR=""
     [[ $EUID -eq 0 ]] || { dn_log "must run as root"; exit 1; }
     umask 022
 
@@ -381,6 +458,8 @@ dn_main() {
 
     # Take the request away first: the path unit fires again as long as request.conf exists.
     local size
+    # A link at data/updates is removed itself (unlink does not follow it), never anything behind it.
+    if [[ -L "$updates" || ! -d "$updates" ]]; then [[ ! -L "$updates" ]] || rm -f -- "$updates"; dn_fail "$updates is not a folder"; fi
     if [[ -L "$request" || ! -f "$request" ]]; then rm -f -- "$request"; dn_fail "the request is not a regular file"; fi
     size="$(stat -c %s -- "$request")"
     if ((size > MAX_REQUEST_BYTES)); then rm -f -- "$request"; dn_fail "the request file is too large"; fi
@@ -432,7 +511,9 @@ dn_main() {
     mv -T -- "$staging" "$release"
     dn_log "unpacked $REQ_VERSION into $release"
 
-    # Stop, back up, migrate as the service user, switch, start.
+    # Stop, back up, migrate as the service user, switch, start. The backup folder is checked before the stop.
+    DN_ERROR=""
+    dn_prepare_backup_dir || dn_fail "backup folder: $DN_ERROR (run install.sh --repair)"
     PHASE=prepared
     systemctl stop "$DN_SERVICE"
     PHASE=stopped
@@ -494,6 +575,10 @@ dn_self_test() {
     t dn_check_member_types <<<$'drwxr-xr-x root/root 0 x ./\n-rw-r--r-- root/root 1 x ./a\nlrwxrwxrwx root/root 0 x ./b -> a'
     f dn_check_member_types <<<$'-rw-r--r-- root/root 1 x ./a\nhrw-r--r-- root/root 0 x ./b link to ./a'
     f dn_check_member_types <<<$'crw-r--r-- root/root 1,3 x ./null'
+    t dn_check_member_modes <<<$'drwxr-xr-x root/root 0 x ./\n-rwxr-xr-x root/root 1 x ./a\ndrwxrwxrwt root/root 0 x ./tmp'
+    f dn_check_member_modes <<<$'-rwsr-xr-x root/root 1 x ./a'
+    f dn_check_member_modes <<<$'-rwxr-Sr-x root/root 1 x ./a'
+    f dn_check_member_modes <<<$'drwxr-sr-x root/root 0 x ./d'
     t dn_normalize_relpath a/b/../c
     f dn_normalize_relpath a/../../b
     f dn_normalize_relpath ..

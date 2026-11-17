@@ -78,6 +78,19 @@ internal sealed class LdapDirectorySource(LdapConnector connector, IOptions<Dire
             }
         }
 
+        public async Task<string?> ReadNetBiosNameAsync(CancellationToken ct)
+        {
+            try
+            {
+                return await DomainNetBiosName.ReadAsync(lease.Connection, baseDn, ct);
+            }
+            catch
+            {
+                lease.Broken = true;
+                throw;
+            }
+        }
+
         private async Task<DirectoryResponse> Send(DirectoryRequest r, CancellationToken ct)
         {
             try

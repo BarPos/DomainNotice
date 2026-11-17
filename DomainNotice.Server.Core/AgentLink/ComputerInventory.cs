@@ -5,7 +5,9 @@ using DomainNotice.Server.Data.Entities;
 using DomainNotice.Shared;
 using DomainNotice.Shared.Protocol;
 using Microsoft.EntityFrameworkCore;
+using DomainNotice.Server.Options;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace DomainNotice.Server.AgentLink;
 
@@ -18,8 +20,17 @@ internal sealed record InventoryUpdate(bool NameChanged, bool SessionsChanged, S
 /// <summary>
 /// Computer inventory and history (plan 6, P6): name, IPs, sessions and their history rows. Callers hold the
 /// per-computer lock of <see cref="AgentHub"/>.
+/// <para>Limits per computer (<see cref="InventoryLimiter"/>): at most Agents:MaxNewSessionUsersPerHour user names
+/// that this computer never reported before, and Agents:MaxNameChangesPerHour name changes. Sessions of users over
+/// the limit are ignored (not stored, not offered announcements); a name over the limit is not taken.</para>
 /// </summary>
-internal sealed class ComputerInventory(IDbContextFactory<AppDbContext> dbFactory, TimeProvider time, ILogger<ComputerInventory> logger)
+internal sealed class ComputerInventory(
+    IDbContextFactory<AppDbContext> dbFactory,
+    TimeProvider time,
+    InventoryLimiter limiter,
+    IOptions<AgentsOptions> agentsOptions,
+    AgentLinkTimings timings,
+    ILogger<ComputerInventory> logger)
 {
     private const int MaxLocalIps = 64;
     private const int MaxSessions = 256;
@@ -70,7 +81,8 @@ internal sealed class ComputerInventory(IDbContextFactory<AppDbContext> dbFactor
         if (computer.IsRevoked) return InventoryUpdate.Refused(RefusedReasons.Revoked);
         if (computer.IsReplaced) return InventoryUpdate.Refused(RefusedReasons.Replaced);
 
-        var nameChanged = ApplyName(db, computer, Clip(reportedName, 255), now, await db.ComputerNameHistory
+        var name = LimitName(computer, Clip(reportedName, 255));
+        var nameChanged = ApplyName(db, computer, name, now, await db.ComputerNameHistory
             .Where(h => h.ComputerId == computer.Id && h.IsCurrent).ToListAsync(ct));
 
         var ips = NormalizeIps(localIps);
@@ -90,8 +102,8 @@ internal sealed class ComputerInventory(IDbContextFactory<AppDbContext> dbFactor
         if (computer.RemoteIp is { Length: > 0 } remote)
             ApplyIps(db, computer.Id, IpAddressKind.Remote, [remote], ipRows, now);
 
-        var reported = SanitizeSessions(sessions);
         var existing = await db.ComputerSessions.Where(s => s.ComputerId == computer.Id).ToListAsync(ct);
+        var reported = await LimitNewUsersAsync(db, computer, existing, SanitizeSessions(sessions), ct);
         var diff = DiffSessions(existing, reported);
         await ApplySessionsAsync(db, computer.Id, diff, now, ct);
 
@@ -101,6 +113,51 @@ internal sealed class ComputerInventory(IDbContextFactory<AppDbContext> dbFactor
 
         var change = new SessionsChange(reported, diff.LoggedOn, diff.LoggedOff.Select(ToInfo).ToList());
         return new InventoryUpdate(nameChanged, diff.Changed, change);
+    }
+
+    /// <summary>The reported name, or the current one when this would be a name change over the hourly limit.</summary>
+    private string LimitName(Computer computer, string name)
+    {
+        if (name.Length == 0 || string.Equals(computer.Name, name, StringComparison.OrdinalIgnoreCase)) return name;
+        var limit = agentsOptions.Value.MaxNameChangesPerHour;
+        if (limiter.TryChangeName(computer.Id, limit, timings.InventoryLimitWindow)) return name;
+        if (limiter.ShouldWarn(computer.Id, users: false, timings.InventoryLimitWindow))
+            logger.LogWarning("Computer {Computer} ({Name}) reported more than {Limit} name changes within {Window}; new names are ignored for now (latest: {Reported})",
+                computer.Id, computer.Name, limit, timings.InventoryLimitWindow, LogText.Clip(name));
+        return computer.Name;
+    }
+
+    /// <summary>
+    /// Drops sessions of users this computer never reported before (no current session, no logon history) once the
+    /// hourly limit of new users is reached. Users seen before are always kept.
+    /// </summary>
+    private async Task<List<SessionInfo>> LimitNewUsersAsync(AppDbContext db, Computer computer, List<ComputerSession> existing,
+        List<SessionInfo> reported, CancellationToken ct)
+    {
+        var limit = agentsOptions.Value.MaxNewSessionUsersPerHour;
+        if (limit <= 0 || reported.Count == 0) return reported;
+        var known = existing.Select(s => s.UserKey).ToHashSet(StringComparer.Ordinal);
+        var candidates = reported.Select(s => UserKeys.Normalize(s.UserName)).Where(k => !known.Contains(k)).Distinct().ToList();
+        if (candidates.Count == 0) return reported;
+        var seenBefore = await db.UserLogonHistory
+            .Where(h => h.ComputerId == computer.Id && candidates.Contains(h.UserKey))
+            .Select(h => h.UserKey).Distinct().ToListAsync(ct);
+        known.UnionWith(seenBefore);
+
+        var result = new List<SessionInfo>(reported.Count);
+        var ignored = 0;
+        foreach (var s in reported)
+        {
+            var key = UserKeys.Normalize(s.UserName);
+            if (known.Contains(key) || limiter.TryAddUser(computer.Id, key, limit, timings.InventoryLimitWindow))
+                result.Add(s);
+            else
+                ignored++;
+        }
+        if (ignored > 0 && limiter.ShouldWarn(computer.Id, users: true, timings.InventoryLimitWindow))
+            logger.LogWarning("Computer {Computer} ({Name}) reported more than {Limit} new users within {Window}; {Ignored} sessions of further new users are ignored for now",
+                computer.Id, computer.Name, limit, timings.InventoryLimitWindow, ignored);
+        return result;
     }
 
     private static bool ApplyName(AppDbContext db, Computer computer, string name, DateTime now, List<ComputerNameHistory> current)
@@ -294,7 +351,7 @@ internal sealed class ComputerInventory(IDbContextFactory<AppDbContext> dbFactor
         var result = new Dictionary<int, SessionInfo>();
         foreach (var s in sessions ?? [])
         {
-            if (s is null || string.IsNullOrWhiteSpace(s.UserName)) continue;
+            if (s is null || string.IsNullOrWhiteSpace(s.UserName) || s.UserName.Any(char.IsControl)) continue;
             if (result.Count >= MaxSessions && !result.ContainsKey(s.SessionId)) break;
             result[s.SessionId] = s with
             {

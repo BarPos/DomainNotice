@@ -121,8 +121,8 @@ internal static partial class ConsoleStrings
         d["Computer deleted."] = "Komputer usunięty.";
 
         // Awaiting approval
-        d["These computers claim the name of a computer that is already linked to another enrolled key, and have no Kerberos proof. Until you decide, they receive only Everyone and User announcements (or nothing, see Settings)."] =
-            "Te komputery podają nazwę komputera, który jest już powiązany z innym zarejestrowanym kluczem, i nie mają dowodu Kerberos. Dopóki nie zdecydujesz, otrzymują tylko ogłoszenia dla wszystkich i dla użytkowników (albo nic, zobacz Ustawienia).";
+        d["These computers claim the name of a computer that is already linked to another enrolled key: either without Kerberos proof, or with a proof while the other key was online in the last 7 days (a reinstall, or a copied identity). Until you decide, they receive only Everyone and User announcements (or nothing, see Settings)."] =
+            "Te komputery podają nazwę komputera, który jest już powiązany z innym zarejestrowanym kluczem, i robią to bez dowodu Kerberos albo z dowodem, gdy tamten klucz był online w ciągu ostatnich 7 dni (ponowna instalacja albo skopiowana tożsamość). Dopóki nie zdecydujesz, otrzymują tylko ogłoszenia dla wszystkich i dla użytkowników (albo nic, zobacz Ustawienia).";
         d["Nothing is waiting for approval."] = "Nic nie czeka na zatwierdzenie.";
         d["Current record (holds the AD link)"] = "Obecny rekord (ma powiązanie z AD)";
         d["The record holding the link no longer exists."] = "Rekord z powiązaniem już nie istnieje.";
@@ -228,16 +228,11 @@ internal static partial class ConsoleStrings
         d["No match."] = "Brak wyników.";
         d["logged on at {0}"] = "zalogowany na {0}";
 
-        // Endpoints (setup, MSI upload) and access checks
+        // Endpoints (setup, MSI download) and access checks
         d["The passwords do not match."] = "Hasła nie są zgodne.";
         d["The account could not be created."] = "Nie udało się utworzyć konta.";
         d["No agent package is cached for this server version."] = "Brak pakietu agenta w pamięci podręcznej dla tej wersji serwera.";
-        d["The file is larger than {0} MB."] = "Plik jest większy niż {0} MB.";
-        d["Choose an MSI file."] = "Wybierz plik MSI.";
-        d["Only .msi files can be imported."] = "Można importować tylko pliki .msi.";
-        d["The file is too large."] = "Plik jest za duży.";
-        d["Imported {0} for version {1}."] = "Zaimportowano {0} dla wersji {1}.";
-        d["The package could not be imported."] = "Nie udało się zaimportować pakietu.";
+        d["The file is too large."] = "Plik jest za duży."; // server update downloads (UpdateFiles)
         d["Read-only access: this action needs the Admin role."] = "Dostęp tylko do odczytu: ta akcja wymaga roli Admin.";
     }
 }

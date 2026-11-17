@@ -38,6 +38,13 @@ internal sealed class LocalAccountService(
 
     public static string Normalize(string userName) => (userName ?? "").Trim().ToLowerInvariant();
 
+    /// <summary>
+    /// Session stamp of a password: part of the SHA-256 of the stored hash (which has a fresh salt on every reset), so
+    /// a password reset in the Console or with --reset-local-password ends existing sessions. Reveals nothing usable.
+    /// </summary>
+    public static string PasswordStamp(string passwordHash) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(passwordHash ?? "")))[..32];
+
     internal static string? ValidateUserName(string? userName)
     {
         var name = userName?.Trim() ?? "";

@@ -25,7 +25,13 @@ nav_order: 1
 +-------------------+-----------+----------------------+
 ```
 
-- `length` counts the body only. A body above `Agents:MaxMessageBytes` (1 MiB) closes the connection.
+- `length` counts the body only. A body above the receiver's limit closes the connection:
+  - the agent accepts up to 1 MiB (`Agents:MaxMessageBytes` on the server bounds what it sends, update chunks included);
+  - the server accepts up to `Agents:MaxEnrolMessageBytes` (64 KiB) from a key that is not enrolled, and up to
+    `Agents:MaxInboundMessageBytes` (512 KiB) once the key is enrolled. A worst-case 1.0.x Hello (256 sessions with
+    long non-ASCII user names, 64 addresses) is about a sixth of that.
+  - Receivers allocate the body as its bytes arrive, so a header that announces a large body costs nothing until
+    the data comes.
 - **Kind 0, JSON envelope:**
   `{"v":1,"type":"Hello","id":"<uuid>","replyTo":"<uuid>?","payload":{…}}`.
   - Property names are camelCase and enums are strings.

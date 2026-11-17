@@ -185,7 +185,7 @@ public class GridTranslationTests(PostgresFixture pg)
                         Filters = [new FilterClause(field.Key, op, value)], Search = "a",
                         Sort = field.Sortable ? field.Key : null, Descending = true,
                     };
-                    var csv = await list.ExportCsvAsync(gctx, q, Ct);
+                    var csv = await list.ExportCsvAsync(gctx, q, CsvStyle.Default, Ct);
                     Assert.True(csv.Length >= 3, $"{list.Name}.{field.Key} {op}");
                 }
             }

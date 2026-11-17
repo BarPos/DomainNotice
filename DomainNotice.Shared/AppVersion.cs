@@ -6,7 +6,7 @@ namespace DomainNotice.Shared;
 /// </summary>
 public static class AppVersion
 {
-    public const string Current = "1.0.4";
+    public const string Current = "1.0.5";
 
     /// <summary>Oldest agent version the server still accepts. Raised only on purpose.</summary>
     public const string MinimumAgent = "1.0.0";

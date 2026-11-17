@@ -22,6 +22,8 @@ public static class SettingKeys
     public const string DirectoryBindPassword = "Directory.BindPassword";
     /// <summary>Highest uSNChanged seen, per DC: key prefix + host.</summary>
     public const string DirectoryHighestUsnPrefix = "Directory.HighestUsn.";
+    /// <summary>NetBIOS name of the domain of Directory:BaseDn ("CORP"), written by the directory sync.</summary>
+    public const string DirectoryNetBiosName = "Directory.NetBiosName";
     /// <summary>Text shown to the right of the title in the announcement window. Unset = "DomainNotice".</summary>
     public const string AnnouncementHeaderText = "Announcements.HeaderText";
     /// <summary>"true"/"false": update outdated agents automatically when online. Overrides Agents:AutoUpdate when set.</summary>
@@ -67,6 +69,8 @@ public static class AuditActions
     public const string ComputerDeleted = "computer.deleted";
     public const string ComputerApprovedReplace = "computer.approved-replace";
     public const string ComputerKeptSeparate = "computer.kept-separate";
+    /// <summary>A Kerberos proof did not take over a recently seen Proven record; the newcomer awaits approval.</summary>
+    public const string ComputerProofAwaitingApproval = "computer.proof-awaiting-approval";
     public const string InstallPasswordChanged = "enrolment.password-changed";
     public const string InstallPasswordRequirementChanged = "enrolment.requirement-changed";
     public const string SettingChanged = "setting.changed";
@@ -78,6 +82,7 @@ public static class AuditActions
     public const string DirectoryBindPasswordChanged = "directory.bind-password-changed";
     public const string AgentUpdateRequested = "agent-update.requested";
     public const string AgentUpdateCancelled = "agent-update.cancelled";
+    /// <summary>No longer written (the Console MSI upload was removed in 1.0.5); kept for older audit rows.</summary>
     public const string AgentPackageImported = "agent-package.imported";
     public const string ServerUpdateRequested = "server-update.requested";
     public const string SignIn = "sign-in";

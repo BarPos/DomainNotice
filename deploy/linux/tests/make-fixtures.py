@@ -58,6 +58,10 @@ def main():
     write(folder, "link-absolute.tar.gz", lambda t: (add_file(t, "./ok"), add_link(t, "./etc", "/etc")))
     write(folder, "link-then-write.tar.gz",
           lambda t: (add_link(t, "./out", "../outside"), add_file(t, "./out/dn-evil-through-link")))
+    # Each link stays inside on its own text, but together they leave: sub/up -> .. is the root, so
+    # sub/up/../.. is above it. Only the realpath check in dn_check_tree (GNU realpath) catches this.
+    write(folder, "link-chain.tar.gz",
+          lambda t: (add_dir(t, "./sub"), add_link(t, "./sub/up", ".."), add_link(t, "./escape", "sub/up/../..")))
     write(folder, "hardlink.tar.gz", lambda t: (add_file(t, "./ok"), add_link(t, "./hard", "./ok", tarfile.LNKTYPE)))
 
     def fifo(t):

@@ -16,12 +16,28 @@ internal sealed class FakeDomainAuthenticator : IDomainAuthenticator
     public bool IsAvailable { get; set; } = true;
     public Func<string, string, DomainAuthResult> Handler { get; set; } =
         (_, _) => new DomainAuthResult(DomainAuthStatus.InvalidCredentials);
-    public int Calls { get; private set; }
+    /// <summary>When set, every call waits for it first (to keep calls in flight at the same time).</summary>
+    public Task? Gate { get; set; }
+    private int _calls, _inFlight, _maxInFlight;
+    public int Calls => Volatile.Read(ref _calls);
+    public int InFlight => Volatile.Read(ref _inFlight);
+    public int MaxInFlight => Volatile.Read(ref _maxInFlight);
 
-    public Task<DomainAuthResult> AuthenticateAsync(string userName, string password, CancellationToken ct)
+    public async Task<DomainAuthResult> AuthenticateAsync(string userName, string password, CancellationToken ct)
     {
-        Calls++;
-        return Task.FromResult(Handler(userName, password));
+        Interlocked.Increment(ref _calls);
+        var now = Interlocked.Increment(ref _inFlight);
+        int seen;
+        while ((seen = Volatile.Read(ref _maxInFlight)) < now && Interlocked.CompareExchange(ref _maxInFlight, now, seen) != seen) { }
+        try
+        {
+            if (Gate is { } gate) await gate.WaitAsync(ct);
+            return Handler(userName, password);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight);
+        }
     }
 }
 
@@ -213,20 +229,35 @@ public class SignInTests(PostgresFixture pg)
     }
 
     [Fact]
-    public async Task Rate_limited_per_account_then_released_after_window()
+    public async Task Rate_limited_per_account_and_ip_then_released_after_window()
     {
         var h = await AccountsHarness.CreateAsync(pg);
         await h.Accounts.CreateFirstAsync("root", "password-1", Ct);
-        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccount; i++)
-            Assert.False((await h.SignIn.SignInLocalAsync("root", "wrong-" + i, $"10.0.0.{i}", Ct)).Succeeded);
+        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccountAndIp; i++)
+            Assert.False((await h.SignIn.SignInLocalAsync("root", "wrong-" + i, "10.0.0.1", Ct)).Succeeded);
 
-        // Correct password from a fresh IP is still refused: the account is over its limit.
-        var blocked = await h.SignIn.SignInLocalAsync("ROOT", "password-1", "10.9.9.9", Ct);
+        // Correct password from the same IP is refused without checking it: (account, IP) is over its limit.
+        var blocked = await h.SignIn.SignInLocalAsync("ROOT", "password-1", "10.0.0.1", Ct);
         Assert.False(blocked.Succeeded);
         Assert.Equal(AdminSignInService.TooManyAttempts, blocked.Error);
 
-        h.Ctx.Time.Advance(SignInRateLimiter.Window);
+        // One attacking address does not lock the account out for everyone else.
         Assert.True((await h.SignIn.SignInLocalAsync("root", "password-1", "10.9.9.9", Ct)).Succeeded);
+
+        h.Ctx.Time.Advance(SignInRateLimiter.Window);
+        Assert.True((await h.SignIn.SignInLocalAsync("root", "password-1", "10.0.0.1", Ct)).Succeeded);
+    }
+
+    [Fact]
+    public async Task Account_is_blocked_everywhere_only_after_many_failures_from_many_ips()
+    {
+        var h = await AccountsHarness.CreateAsync(pg);
+        await h.Accounts.CreateFirstAsync("root", "password-1", Ct);
+        var perIp = SignInRateLimiter.MaxFailuresPerAccountAndIp;
+        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccount; i++)
+            Assert.False((await h.SignIn.SignInLocalAsync("root", "wrong", $"10.1.{i / perIp}.1", Ct)).Succeeded);
+        var blocked = await h.SignIn.SignInLocalAsync("root", "password-1", "198.51.100.1", Ct);
+        Assert.Equal(AdminSignInService.TooManyAttempts, blocked.Error);
     }
 
     [Fact]
@@ -234,10 +265,10 @@ public class SignInTests(PostgresFixture pg)
     {
         var h = await AccountsHarness.CreateAsync(pg);
         await h.Accounts.CreateFirstAsync("root", "password-1", Ct);
-        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccount - 1; i++)
+        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccountAndIp - 1; i++)
             await h.SignIn.SignInLocalAsync("root", "wrong", null, Ct);
         Assert.True((await h.SignIn.SignInLocalAsync("root", "password-1", null, Ct)).Succeeded);
-        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccount - 1; i++)
+        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccountAndIp - 1; i++)
             await h.SignIn.SignInLocalAsync("root", "wrong", null, Ct);
         Assert.True((await h.SignIn.SignInLocalAsync("root", "password-1", null, Ct)).Succeeded);
     }
@@ -263,14 +294,63 @@ public class SignInTests(PostgresFixture pg)
     }
 
     [Fact]
+    public async Task Parallel_attempts_cannot_get_past_the_limit()
+    {
+        var h = await AccountsHarness.CreateAsync(pg, directoryConfigured: true);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Domain.Gate = gate.Task;
+        var attempts = Enumerable.Range(0, 40)
+            .Select(_ => Task.Run(() => h.SignIn.SignInDomainAsync("jdoe", "wrong", "10.0.0.1", Ct), Ct)).ToList();
+        // Hold the first verifications in flight until no more can start.
+        for (var i = 0; i < 500 && h.Domain.Calls < SignInRateLimiter.MaxConcurrentVerifications; i++) await Task.Delay(10, Ct);
+        await Task.Delay(100, Ct);
+        Assert.True(h.Domain.InFlight <= SignInRateLimiter.MaxConcurrentVerifications);
+        gate.SetResult();
+        var results = await Task.WhenAll(attempts);
+
+        Assert.True(h.Domain.Calls <= SignInRateLimiter.MaxFailuresPerAccountAndIp, $"{h.Domain.Calls} passwords were checked");
+        Assert.True(h.Domain.MaxInFlight <= SignInRateLimiter.MaxConcurrentVerifications);
+        Assert.Equal(h.Domain.Calls, results.Count(r => r.Error == AdminSignInService.GenericFailure));
+        Assert.Equal(40 - h.Domain.Calls, results.Count(r => r.Error == AdminSignInService.TooManyAttempts));
+
+        // Only one "rate limited" audit row for all the refused requests.
+        await using var db = h.Ctx.Db.CreateContext();
+        Assert.Equal(1, await db.AuditLog.CountAsync(a => a.Action == AuditActions.SignInFailed && a.Details!.Contains("rate limited"), Ct));
+    }
+
+    [Fact]
+    public void Reservation_is_released_when_nothing_was_verified()
+    {
+        var time = new ManualTimeProvider(DateTime.UtcNow);
+        var limiter = new SignInRateLimiter(time);
+        var key = SignInRateLimiter.AccountKey("domain", "x");
+        var open = Enumerable.Range(0, SignInRateLimiter.MaxFailuresPerAccountAndIp)
+            .Select(i => limiter.TryBegin(key, "1.2.3.4", out _)).ToList();
+        Assert.All(open, Assert.NotNull);
+        Assert.Null(limiter.TryBegin(key, "1.2.3.4", out var blockedBy)); // in-flight attempts count
+        Assert.True(limiter.ShouldAuditBlock(blockedBy));
+        Assert.False(limiter.ShouldAuditBlock(blockedBy)); // once per window
+        foreach (var a in open) a!.Dispose(); // e.g. directory unreachable
+        Assert.False(limiter.IsBlocked(key, "1.2.3.4"));
+
+        using (var a = limiter.TryBegin(key, "1.2.3.4", out _)) a!.Failed();
+        Assert.False(limiter.IsBlocked(key, "1.2.3.4"));
+        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccountAndIp - 1; i++)
+            using (var a = limiter.TryBegin(key, "1.2.3.4", out _)) a!.Failed();
+        Assert.True(limiter.IsBlocked(key, "1.2.3.4"));
+        Assert.False(limiter.IsBlocked(key, "5.6.7.8"));
+    }
+
+    [Fact]
     public async Task Domain_roles_pass_through_and_failures_are_limited_per_account()
     {
         var h = await AccountsHarness.CreateAsync(pg, directoryConfigured: true);
+        var bossGuid = Guid.NewGuid();
         h.Domain.Handler = (user, pw) => (BindNames.SamAccountName(user).ToLowerInvariant(), pw) switch
         {
-            ("boss", "pw") => new DomainAuthResult(DomainAuthStatus.Success, @"EXAMPLE\boss", "The Boss", ConsoleRoles.Admin),
+            ("boss", "pw") => new DomainAuthResult(DomainAuthStatus.Success, @"EXAMPLE\boss", "The Boss", ConsoleRoles.Admin, ObjectGuid: bossGuid),
             ("reader", "pw") => new DomainAuthResult(DomainAuthStatus.Success, @"EXAMPLE\reader", null, ConsoleRoles.Viewer),
-            ("outsider", "pw") => new DomainAuthResult(DomainAuthStatus.NotAuthorized, @"EXAMPLE\outsider"),
+            ("outsider", "pw") => new DomainAuthResult(DomainAuthStatus.NotAuthorized, @"EXAMPLE\outsider", Error: "not in an admin or viewer group"),
             _ => new DomainAuthResult(DomainAuthStatus.InvalidCredentials),
         };
         Assert.True(h.SignIn.DomainSignInAvailable);
@@ -281,25 +361,58 @@ public class SignInTests(PostgresFixture pg)
         Assert.Equal(@"EXAMPLE\boss", boss.UserName);
         Assert.Equal("The Boss", boss.DisplayName);
         Assert.Equal(SignInSource.Domain, boss.Source);
+        Assert.Equal(bossGuid, boss.DirectoryObjectGuid);
+        Assert.Equal(h.Ctx.Time.GetUtcNow().UtcDateTime, boss.IssuedAtUtc);
 
         var reader = await h.SignIn.SignInDomainAsync("reader@example.local", "pw", "10.0.0.1", Ct);
         Assert.Equal(ConsoleRoles.Viewer, reader.Role);
         Assert.Equal(@"EXAMPLE\reader", reader.DisplayName);
 
+        // A correct password outside the groups gets the same message as a wrong one (no password oracle).
         var outsider = await h.SignIn.SignInDomainAsync("outsider", "pw", "10.0.0.1", Ct);
+        var wrong = await h.SignIn.SignInDomainAsync("outsider", "bad", "10.0.0.1", Ct);
         Assert.False(outsider.Succeeded);
         Assert.Null(outsider.Role);
+        Assert.Equal(AdminSignInService.GenericFailure, outsider.Error);
+        Assert.Equal(wrong.Error, outsider.Error);
 
-        // Different spellings of one account share the limit.
-        string[] spellings = ["jdoe", @"EXAMPLE\jdoe", "JDoe@example.local", "jdoe", "JDOE"];
-        foreach (var s in spellings) Assert.False((await h.SignIn.SignInDomainAsync(s, "bad", $"10.1.0.{s.Length}", Ct)).Succeeded);
+        // "EXAMPLE\jdoe" and "jdoe" share one key; a UPN has its own.
+        string[] spellings = ["jdoe", @"EXAMPLE\jdoe", "JDOE", @"other\jdoe", "jdoe"];
+        foreach (var s in spellings) Assert.False((await h.SignIn.SignInDomainAsync(s, "bad", "10.1.0.1", Ct)).Succeeded);
         var calls = h.Domain.Calls;
-        Assert.Equal(AdminSignInService.TooManyAttempts, (await h.SignIn.SignInDomainAsync("jdoe", "bad", "10.2.0.1", Ct)).Error);
+        Assert.Equal(AdminSignInService.TooManyAttempts, (await h.SignIn.SignInDomainAsync(@"Example\JDoe", "bad", "10.1.0.1", Ct)).Error);
         Assert.Equal(calls, h.Domain.Calls);
+        Assert.Equal(AdminSignInService.GenericFailure, (await h.SignIn.SignInDomainAsync("jdoe@example.local", "bad", "10.1.0.1", Ct)).Error);
 
         await using var db = h.Ctx.Db.CreateContext();
         Assert.True(await db.AuditLog.AnyAsync(a => a.Action == AuditActions.SignIn && a.Actor == @"EXAMPLE\boss", Ct));
         Assert.True(await db.AuditLog.AnyAsync(a => a.Action == AuditActions.SignInFailed && a.Details!.Contains("not in an admin"), Ct));
+    }
+
+    [Fact]
+    public async Task Dn_form_sign_in_names_are_refused_without_asking_the_directory()
+    {
+        var h = await AccountsHarness.CreateAsync(pg, directoryConfigured: true);
+        h.Domain.Handler = (_, _) => new DomainAuthResult(DomainAuthStatus.Success, @"EXAMPLE\jdoe", null, ConsoleRoles.Admin);
+        var r = await h.SignIn.SignInDomainAsync("CN=jdoe,OU=Staff,DC=example,DC=local", "pw", "10.0.0.1", Ct);
+        Assert.False(r.Succeeded);
+        Assert.Equal(AdminSignInService.GenericFailure, r.Error);
+        Assert.Equal(0, h.Domain.Calls);
+        await using var db = h.Ctx.Db.CreateContext();
+        Assert.True(await db.AuditLog.AnyAsync(a => a.Action == AuditActions.SignInFailed && a.Details!.Contains("DN form"), Ct));
+    }
+
+    [Fact]
+    public async Task Local_sign_in_carries_a_password_stamp_that_a_reset_changes()
+    {
+        var h = await AccountsHarness.CreateAsync(pg);
+        await h.Accounts.CreateFirstAsync("root", "password-1", Ct);
+        var first = await h.SignIn.SignInLocalAsync("root", "password-1", null, Ct);
+        Assert.False(string.IsNullOrEmpty(first.PasswordStamp));
+        Assert.Equal(h.Ctx.Time.GetUtcNow().UtcDateTime, first.IssuedAtUtc);
+        Assert.True((await h.Accounts.ResetPasswordAsync(await h.IdOf("root"), "password-2", "admin", Ct)).Ok);
+        var second = await h.SignIn.SignInLocalAsync("root", "password-2", null, Ct);
+        Assert.NotEqual(first.PasswordStamp, second.PasswordStamp);
     }
 
     [Fact]
@@ -315,6 +428,8 @@ public class SignInTests(PostgresFixture pg)
         }
         h.Domain.Handler = (_, _) => new DomainAuthResult(DomainAuthStatus.Success, "jdoe", null, ConsoleRoles.Admin);
         Assert.True((await h.SignIn.SignInDomainAsync("jdoe", "pw", "10.0.0.1", Ct)).Succeeded);
+        await using var db = h.Ctx.Db.CreateContext();
+        Assert.Equal(1, await db.AuditLog.CountAsync(a => a.Details!.Contains("directory unavailable"), Ct)); // once per IP and window
     }
 
     [Fact]
@@ -339,9 +454,9 @@ public class SignInTests(PostgresFixture pg)
         var time = new ManualTimeProvider(DateTime.UtcNow);
         var limiter = new SignInRateLimiter(time);
         var key = SignInRateLimiter.AccountKey("local", "x");
-        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccount; i++)
+        for (var i = 0; i < SignInRateLimiter.MaxFailuresPerAccountAndIp; i++)
         {
-            limiter.RecordFailure(key, null);
+            using (var a = limiter.TryBegin(key, null, out _)) a!.Failed();
             time.Advance(TimeSpan.FromMinutes(1));
         }
         Assert.True(limiter.IsBlocked(key, null));

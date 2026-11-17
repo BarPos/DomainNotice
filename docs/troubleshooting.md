@@ -36,6 +36,9 @@ nav_order: 11
    - *Wrong install password*: set the right one, or check **Settings → Enrolment**. With the requirement on and no
      password set, every enrolment is refused.
    - *rate-limited*: too many wrong passwords from that IP; wait 15 minutes.
+   - *closed the connection during enrolment*, or the connection fails at once when many PCs start together: the
+     server was busy checking passwords or the address has `Agents:MaxPendingConnectionsPerIp` connections in
+     progress. The agent retries by itself within seconds to minutes.
    - *revoked*: the computer was revoked. Reinstall with `INSTALLPASSWORD=…`, or run
      `DomainNotice.Agent.exe --reenrol`.
    - *The server is older than this agent*: update the server first.
@@ -48,6 +51,9 @@ nav_order: 11
   group, OU or AD-computer targets. See [Targeting](console/announcements.md#targeting).
 - **Times shown per user** has already been reached, or the **repeat interval** has not passed yet.
 - Only Active and Locked sessions receive windows; disconnected RDP sessions get them on reconnect.
+- On a terminal server, the server log says *reported more than … new users*: more first-time users than
+  `Agents:MaxNewSessionUsersPerHour` logged on within an hour. They are picked up in the next hours; raise the limit
+  for such servers.
 
 ## Forgotten local password, or locked out
 
@@ -57,8 +63,19 @@ password; it also enables the account if it was disabled. `install.sh` is in
 
 ## Domain sign-in fails
 
+- The sign-in page shows the same message for every failure. The reason is in the **Audit log** (*sign-in.failed*)
+  and the service log.
 - The user must be in `Directory:AdminGroups` or `ViewerGroups`, directly or through nested groups. Primary-group
   membership (e.g. *Domain Users*) is not checked.
+- Only accounts of the domain of `Directory:BaseDn` can sign in. Type `user`, `user@domain` or `DOMAIN\user` with
+  that domain's NetBIOS name; DNs are refused. *not in the configured domain* in the audit log means the account (or
+  the typed prefix) belongs to another domain.
+- *ambiguous* in the log: more than one group has the configured group name as sAMAccountName or cn. Configure the
+  group by its DN.
+- Signed out after a few minutes: a directory sync has shown the user disabled, deleted, outside the groups or in the
+  other role. This also happens when the membership goes through a nested group outside `Directory:BaseDn`, which
+  the sync does not copy: move the group under `BaseDn` or add the user directly. Sessions also end
+  `Console:SessionMaxHours` (12) after sign-in.
 - Check **Directory → Test connection**. Certificate errors mean `TrustedCertificate` is wrong or the CA is missing
   from the OS store.
 - Local accounts always work as a fallback while `LocalAccounts:Enabled` is `true`.
@@ -75,3 +92,14 @@ password; it also enables the account if it was disabled. `install.sh` is in
   GitHub.
 - Self-update needs an `install.sh` install on Ubuntu 24.04+ (`/opt/domainnotice/current` and the update units).
 - An agent update task stays *Sent* until the PC comes online. It turns *Failed* after `Agents:UpdateTimeoutMinutes`.
+- **Update agent** says *the agent package is not in the cache*: the server downloads the MSI for its own version
+  from the release at start and on **Settings → About and updates → Check now**; the server log says why it failed
+  (no GitHub access, no release `v<version>`, SHA-256 mismatch). The Console has no MSI upload since 1.0.5. Without
+  GitHub access, install and update agents with the release MSI directly (see
+  [Updates](server/updates.md#agents-update-agent)).
+
+## A CSV export opens in one column
+
+The field separator follows the Console language: `;` for Polish, `,` otherwise. A spreadsheet set to the other
+list separator puts each row in one column. Use the spreadsheet's import dialog (for example *Data → From Text/CSV*)
+and choose the separator, or switch the language in **Settings → General**.

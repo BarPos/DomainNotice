@@ -165,13 +165,14 @@ public class EndToEndTests(PostgresFixture pg)
         var db = await pg.CreateDatabaseAsync();
         await using var server = await TestAgentServer.StartAsync(db, fullCore: true);
 
-        // P13 import of a fake MSI (OLE signature + data): 2.5 chunks.
+        // A fake MSI (OLE signature + data), 2.5 chunks, stored through the download's checks (test-only seeding).
         var msi = new byte[ProtocolInfo.ChunkSize * 2 + ProtocolInfo.ChunkSize / 2];
         Random.Shared.NextBytes(msi);
         new byte[] { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 }.CopyTo(msi, 0);
         var cache = server.Get<IAgentPackageCache>();
-        var imported = await cache.ImportAsync(new MemoryStream(msi), "DomainNotice.Agent.msi", "tester", Ct);
-        Assert.True(imported.Ok, imported.Error);
+        var stored = await ((DomainNotice.Server.Updates.AgentPackageCache)cache).StoreVerifiedAsync(new MemoryStream(msi),
+            Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(msi)), "test", Ct);
+        Assert.True(stored.Ok, stored.Error);
         var package = (await cache.GetCurrentAsync(Ct))!;
 
         var (agent, computerId) = await server.ConnectEnrolledAsync("PC-UPD", []);

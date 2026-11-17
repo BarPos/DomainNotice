@@ -14,9 +14,22 @@ public sealed class FrameConnection : IAsyncDisposable
     {
         _stream = stream;
         _maxBodyBytes = maxBodyBytes;
+        MaxReadBodyBytes = maxBodyBytes;
     }
 
     public Stream Stream => _stream;
+
+    /// <summary>
+    /// Largest frame body accepted by <see cref="ReadAsync"/> (defaults to the constructor's limit, which also bounds
+    /// what this side sends). The server lowers it for peers that have not enrolled yet.
+    /// </summary>
+    public int MaxReadBodyBytes { get; set; }
+
+    /// <summary>
+    /// Bytes allocated for a frame body before it arrives; larger bodies grow as data comes. Default: the announced
+    /// length at once (trusted peer). The server sets <see cref="Framing.InitialBodyBuffer"/> for agents.
+    /// </summary>
+    public int InitialBodyBytes { get; set; } = int.MaxValue;
 
     /// <summary>Sends a message; returns the envelope id (use it to match a reply).</summary>
     public async Task<Guid> SendAsync<T>(T message, Guid? replyTo = null, CancellationToken ct = default) where T : IAgentMessage
@@ -53,14 +66,16 @@ public sealed class FrameConnection : IAsyncDisposable
     /// <exception cref="ProtocolException">Bad frame; the caller must close the connection.</exception>
     public async Task<IncomingFrame?> ReadAsync(CancellationToken ct = default)
     {
-        var frame = await Framing.ReadAsync(_stream, _maxBodyBytes, ct).ConfigureAwait(false);
+        var frame = await Framing.ReadAsync(_stream, MaxReadBodyBytes, InitialBodyBytes, ct).ConfigureAwait(false);
         if (frame is null) return null;
-        return frame.Value.Kind switch
+        var incoming = frame.Value.Kind switch
         {
             FrameKind.Json => IncomingFrame.FromEnvelope(ProtocolCodec.DecodeEnvelope(frame.Value.Body.Span)),
             FrameKind.Chunk => IncomingFrame.FromChunk(PackageChunk.Parse(frame.Value.Body)),
             _ => throw new ProtocolException("Unknown frame kind."),
         };
+        incoming.BodyLength = frame.Value.Body.Length;
+        return incoming;
     }
 
     public async ValueTask DisposeAsync()
@@ -76,6 +91,8 @@ public sealed class IncomingFrame
     /// <summary>Decoded payload, or null for an unknown message type (receivers ignore it).</summary>
     public IAgentMessage? Message { get; private init; }
     public PackageChunk? Chunk { get; private init; }
+    /// <summary>Size of the frame body on the wire (0 when not read from a stream).</summary>
+    public int BodyLength { get; set; }
 
     public static IncomingFrame FromEnvelope(Envelope envelope) =>
         new() { Envelope = envelope, Message = ProtocolCodec.DecodePayload(envelope) };

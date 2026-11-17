@@ -12,7 +12,9 @@ namespace DomainNotice.Agent.Updates;
 /// Agent update (plan 11.3): UpdateAgent → PackageRequest → binary chunks into updates\&lt;taskId&gt;.part (resumed
 /// after a reconnect) → size + SHA-256 check → msiexec started detached, so it survives the MSI stopping this
 /// service. The outcome is reported with UpdateStatus; a failed or rolled-back install is detected at the next
-/// start through the install marker and reported with the end of the MSI log.
+/// start through the install marker and reported with the end of the MSI log. Updates are refused while the data
+/// folder is not secured (<see cref="AgentPaths.InsecureReason"/>), and the updates folder is checked for junctions
+/// and links before every use.
 /// </summary>
 public sealed class AgentUpdater : IDisposable
 {
@@ -84,6 +86,13 @@ public sealed class AgentUpdater : IDisposable
             if (UpdatePolicy.Validate(command) is { } invalid)
             {
                 await FailAsync(command.TaskId, invalid, null, ct).ConfigureAwait(false);
+                return;
+            }
+
+            if (_paths.CheckInUse(_paths.Updates) is { } unsafeFolder)
+            {
+                _logger.LogError("Update task {TaskId}: updates are off on this computer: {Error}", command.TaskId, unsafeFolder);
+                await FailAsync(command.TaskId, "Updates are off on this computer because its data folder is not secure: " + unsafeFolder, null, ct).ConfigureAwait(false);
                 return;
             }
 
@@ -192,8 +201,19 @@ public sealed class AgentUpdater : IDisposable
     private async Task VerifyAndInstallAsync(PackageDownload download, CancellationToken ct)
     {
         await SendStatusAsync(download.TaskId, AgentUpdateState.Verifying, null, null, ct).ConfigureAwait(false);
-        var verify = await Task.Run(download.Verify, ct).ConfigureAwait(false);
-        if (!verify.Ok)
+        VerifyResult verify;
+        try
+        {
+            verify = _paths.CheckInUse(_paths.Updates) is { } unsafeFolder
+                ? new VerifyResult(false, "The updates folder is not secure: " + unsafeFolder)
+                : await Task.Run(download.Verify, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            verify = new VerifyResult(false, "Cannot check the package: " + ex.Message);
+        }
+
+        if (!verify.Ok || verify.Package is null)
         {
             _logger.LogError("Update task {TaskId}: {Error}", download.TaskId, verify.Error);
             await FailAsync(download.TaskId, verify.Error ?? "Verification failed.", null, ct).ConfigureAwait(false);
@@ -201,31 +221,39 @@ public sealed class AgentUpdater : IDisposable
             return;
         }
 
-        var logPath = Path.Combine(_paths.Updates, download.TaskId.ToString("D") + ".log");
-        var marker = new InstallMarker(download.TaskId, download.Version, logPath, _time.GetUtcNow().UtcDateTime);
-        try
-        {
-            marker.Write(_paths.InstallMarker);
-        }
-        catch (IOException ex)
-        {
-            _logger.LogWarning("Could not write the install marker: {Error}", ex.Message);
-        }
-
-        await SendStatusAsync(download.TaskId, AgentUpdateState.Installing, null, null, ct).ConfigureAwait(false);
-        _logger.LogInformation("Update task {TaskId}: starting msiexec for version {Version}.", download.TaskId, download.Version);
-
+        // The verified package stays open (read-only sharing: no writes, no rename, no delete) until msiexec has
+        // been started, so the file msiexec opens is the one that was checked.
         Process msiexec;
-        try
+        var logPath = InstallMarker.LogPathFor(_paths.Updates, download.TaskId);
+        using (var package = verify.Package)
         {
-            msiexec = StartDetachedMsiexec(download.PackagePath, logPath);
-        }
-        catch (Exception ex)
-        {
-            TryDelete(_paths.InstallMarker);
-            await FailAsync(download.TaskId, "Could not start msiexec: " + ex.Message, null, ct).ConfigureAwait(false);
-            DiscardDownload();
-            return;
+            var marker = new InstallMarker(download.TaskId, download.Version, logPath, _time.GetUtcNow().UtcDateTime);
+            try
+            {
+                if (_paths.CheckInUse(_paths.Updates) is { } unsafeFolder) throw new IOException(unsafeFolder);
+                marker.Write(_paths.InstallMarker);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning("Could not write the install marker: {Error}", ex.Message);
+            }
+
+            await SendStatusAsync(download.TaskId, AgentUpdateState.Installing, null, null, ct).ConfigureAwait(false);
+            _logger.LogInformation("Update task {TaskId}: starting msiexec for version {Version}.", download.TaskId, download.Version);
+
+            try
+            {
+                if (_paths.CheckInUse(_paths.Updates) is { } unsafeFolder) throw new IOException("The updates folder is not secure: " + unsafeFolder);
+                msiexec = StartDetachedMsiexec(download.PackagePath, logPath);
+            }
+            catch (Exception ex)
+            {
+                package.Dispose(); // before DiscardDownload deletes the file
+                TryDelete(_paths.InstallMarker);
+                await FailAsync(download.TaskId, "Could not start msiexec: " + ex.Message, null, ct).ConfigureAwait(false);
+                DiscardDownload();
+                return;
+            }
         }
 
         _installing = true;
@@ -261,12 +289,12 @@ public sealed class AgentUpdater : IDisposable
             if (exitCode is 0 or 3010)
             {
                 _logger.LogWarning("Update task {TaskId}: msiexec finished ({ExitCode}) but this service was not replaced.", taskId, exitCode);
-                await FailAsync(taskId, $"msiexec finished with code {exitCode}, but the agent still runs version {AppVersion.Current}.", MsiLogTail.Read(logPath), CancellationToken.None).ConfigureAwait(false);
+                await FailAsync(taskId, $"msiexec finished with code {exitCode}, but the agent still runs version {AppVersion.Current}.", ReadLogTail(logPath), CancellationToken.None).ConfigureAwait(false);
             }
             else
             {
                 _logger.LogError("Update task {TaskId}: msiexec failed with code {ExitCode}.", taskId, exitCode?.ToString() ?? "unknown");
-                await FailAsync(taskId, $"msiexec failed with exit code {exitCode?.ToString() ?? "unknown"}.", MsiLogTail.Read(logPath), CancellationToken.None).ConfigureAwait(false);
+                await FailAsync(taskId, $"msiexec failed with exit code {exitCode?.ToString() ?? "unknown"}.", ReadLogTail(logPath), CancellationToken.None).ConfigureAwait(false);
             }
             DiscardDownload();
         }
@@ -282,6 +310,8 @@ public sealed class AgentUpdater : IDisposable
     /// </summary>
     private async Task ReportPreviousInstallAsync(CancellationToken ct)
     {
+        // Not read at all while the folder is not secure: a planted marker must not make us read and send any file.
+        if (_paths.CheckInUse(_paths.Updates) is not null) return;
         var marker = InstallMarker.TryRead(_paths.InstallMarker);
         if (marker is null || marker.StartedUtc >= _processStartedUtc) return;
 
@@ -296,8 +326,12 @@ public sealed class AgentUpdater : IDisposable
         _logger.LogError("Update task {TaskId}: the install of version {Version} did not complete; still at {Current}.",
             marker.TaskId, marker.Version, AppVersion.Current);
         await FailAsync(marker.TaskId, $"The MSI did not install version {marker.Version}; the agent is still at {AppVersion.Current}.",
-            MsiLogTail.Read(marker.LogPath), ct).ConfigureAwait(false);
+            marker.SafeLogPath(_paths.Updates) is { } log ? MsiLogTail.Read(log) : null, ct).ConfigureAwait(false);
     }
+
+    /// <summary>The end of our own MSI log, read only while the updates folder is still secure.</summary>
+    private string? ReadLogTail(string logPath) =>
+        _paths.CheckInUse(_paths.Updates) is null ? MsiLogTail.Read(logPath) : null;
 
     private Task FailAsync(Guid taskId, string error, string? logTail, CancellationToken ct) =>
         SendStatusAsync(taskId, AgentUpdateState.Failed, error, logTail, ct);

@@ -10,15 +10,16 @@ namespace DomainNotice.Server.Updates;
 /// <summary>
 /// The agent MSI cache in <c>Paths:Data/packages/agent/&lt;version&gt;/</c> (plan 11.3). Each version folder holds
 /// <c>DomainNotice.Agent-&lt;version&gt;-x64.msi</c> and <c>package.json</c> (size, sha256, source, time).
-/// Only the server's own version and the newest older version are kept.
+/// Only the server's own version and the newest older version are kept. The MSI only ever comes from the release
+/// tagged with the server's version, checked against that release's SHA256SUMS.txt; there is no upload path.
 /// </summary>
 internal sealed class AgentPackageCache(IOptions<PathsOptions> paths, IReleaseSource releases, IAuditLog audit,
     TimeProvider time, ILogger<AgentPackageCache> logger) : IAgentPackageCache
 {
     public const long MaxMsiBytes = 512L * 1024 * 1024;
     public const string MetadataFileName = "package.json";
+    /// <summary>The only source since 1.0.5. Folders left by older servers may still say "Import" (a Console upload).</summary>
     public const string SourceGitHub = "GitHub";
-    public const string SourceImport = "Import";
 
     /// <summary>OLE compound file signature; every MSI starts with it.</summary>
     internal static ReadOnlySpan<byte> OleSignature => [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -29,7 +30,7 @@ internal sealed class AgentPackageCache(IOptions<PathsOptions> paths, IReleaseSo
 
     private string Root => paths.Value.AgentPackagesDirectory;
 
-    /// <summary>Size limit for imports and downloads (settable for tests).</summary>
+    /// <summary>Size limit for downloads (settable for tests).</summary>
     internal long MaxBytes { get; set; } = MaxMsiBytes;
 
     public Task<AgentPackageInfo?> GetCurrentAsync(CancellationToken ct = default)
@@ -58,49 +59,6 @@ internal sealed class AgentPackageCache(IOptions<PathsOptions> paths, IReleaseSo
 
     public Stream OpenRead(AgentPackageInfo package) =>
         new FileStream(package.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 81920, useAsync: true);
-
-    /// <summary>P13: import a locally built MSI as the package for the server's own version.</summary>
-    public async Task<OperationResult> ImportAsync(Stream msi, string fileName, string actor, CancellationToken ct = default)
-    {
-        // fileName is only checked and logged, never used in a path.
-        if (string.IsNullOrWhiteSpace(fileName) || !fileName.Trim().EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
-            return OperationResult.Fail("Choose an .msi file.");
-
-        await _lock.WaitAsync(ct);
-        try
-        {
-            var version = AppVersion.Current;
-            var dir = VersionDirectory(version);
-            System.IO.Directory.CreateDirectory(dir);
-            var temp = Path.Combine(dir, $".import-{Guid.NewGuid():N}.tmp");
-            (long Size, string Sha256, byte[] Head) copied;
-            try
-            {
-                copied = await FileHashing.CopyAndHashAsync(msi, temp, MaxBytes, ct);
-            }
-            catch (InvalidDataException ex)
-            {
-                return OperationResult.Fail(ex.Message);
-            }
-            if (copied.Size < OleSignature.Length || !copied.Head.AsSpan().SequenceEqual(OleSignature))
-            {
-                FileHashing.TryDelete(temp);
-                return OperationResult.Fail("The file is not an MSI package (no OLE compound file signature).");
-            }
-
-            var info = Commit(version, temp, copied.Size, copied.Sha256, SourceImport);
-            Prune();
-            await audit.WriteAsync(actor, AuditActions.AgentPackageImported, "AgentPackage", version,
-                $"file={Sanitize(fileName)}; size={copied.Size}; sha256={copied.Sha256}", ct);
-            logger.LogInformation("Imported agent MSI {Version} ({Size} bytes, sha256 {Sha256}) by {Actor}", version, copied.Size, copied.Sha256, actor);
-            _current = info;
-            return OperationResult.Success;
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
 
     /// <summary>
     /// Downloads the MSI for the server's own version from the release tagged <c>v&lt;version&gt;</c> (never
@@ -135,28 +93,13 @@ internal sealed class AgentPackageCache(IOptions<PathsOptions> paths, IReleaseSo
             if (!Sha256Sums.Parse(sumsText).TryGetValue(msiName, out var expected))
                 return OperationResult.Fail($"{ReleaseAssetNames.Sums} has no entry for {msiName}.");
 
-            var dir = VersionDirectory(version);
-            System.IO.Directory.CreateDirectory(dir);
-            var temp = Path.Combine(dir, $".download-{Guid.NewGuid():N}.tmp");
-            (long Size, string Sha256, byte[] Head) copied;
+            OperationResult stored;
             await using (var s = await releases.OpenAssetAsync(msiAsset, ct))
-                copied = await FileHashing.CopyAndHashAsync(s, temp, MaxBytes, ct);
-            if (!string.Equals(copied.Sha256, expected, StringComparison.Ordinal))
-            {
-                FileHashing.TryDelete(temp);
-                return OperationResult.Fail($"{msiName}: SHA-256 mismatch (expected {expected}, got {copied.Sha256}).");
-            }
-            if (!copied.Head.AsSpan().SequenceEqual(OleSignature))
-            {
-                FileHashing.TryDelete(temp);
-                return OperationResult.Fail($"{msiName} is not an MSI package.");
-            }
-
-            _current = Commit(version, temp, copied.Size, copied.Sha256, SourceGitHub);
-            Prune();
+                stored = await StoreLockedAsync(version, s, expected, SourceGitHub, ct);
+            if (!stored.Ok) return stored;
             await audit.WriteAsync("system", UpdateAuditActions.AgentPackageDownloaded, "AgentPackage", version,
-                $"size={copied.Size}; sha256={copied.Sha256}", ct);
-            logger.LogInformation("Downloaded agent MSI {Version} ({Size} bytes)", version, copied.Size);
+                $"size={_current!.Size}; sha256={_current.Sha256}", ct);
+            logger.LogInformation("Downloaded agent MSI {Version} ({Size} bytes)", version, _current.Size);
             return OperationResult.Success;
         }
         catch (Exception ex) when (ex is ReleaseSourceException or HttpRequestException or IOException or InvalidDataException)
@@ -168,6 +111,57 @@ internal sealed class AgentPackageCache(IOptions<PathsOptions> paths, IReleaseSo
         {
             _lock.Release();
         }
+    }
+
+    /// <summary>
+    /// Stores an MSI for the server's own version through the same checks as the release download (SHA-256 against
+    /// <paramref name="expectedSha256"/>, OLE signature, size limit), then prunes. For tests only: nothing in the Console
+    /// or the agent link calls it; the product fills the cache only from <see cref="EnsureCurrentAsync"/>.
+    /// </summary>
+    internal async Task<OperationResult> StoreVerifiedAsync(Stream msi, string expectedSha256, string source, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            return await StoreLockedAsync(AppVersion.Current, msi, expectedSha256, source, ct);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>Copies to a temp file in the version folder, verifies, commits and prunes. The caller holds the lock.</summary>
+    private async Task<OperationResult> StoreLockedAsync(string version, Stream msi, string expectedSha256, string source, CancellationToken ct)
+    {
+        var msiName = ReleaseAssetNames.AgentMsi(version);
+        var dir = VersionDirectory(version);
+        System.IO.Directory.CreateDirectory(dir);
+        var temp = Path.Combine(dir, $".download-{Guid.NewGuid():N}.tmp");
+        (long Size, string Sha256, byte[] Head) copied;
+        try
+        {
+            copied = await FileHashing.CopyAndHashAsync(msi, temp, MaxBytes, ct);
+        }
+        catch
+        {
+            FileHashing.TryDelete(temp);
+            throw;
+        }
+        if (!string.Equals(copied.Sha256, expectedSha256, StringComparison.Ordinal))
+        {
+            FileHashing.TryDelete(temp);
+            return OperationResult.Fail($"{msiName}: SHA-256 mismatch (expected {expectedSha256}, got {copied.Sha256}).");
+        }
+        if (copied.Size < OleSignature.Length || !copied.Head.AsSpan().SequenceEqual(OleSignature))
+        {
+            FileHashing.TryDelete(temp);
+            return OperationResult.Fail($"{msiName} is not an MSI package.");
+        }
+
+        _current = Commit(version, temp, copied.Size, copied.Sha256, source);
+        Prune();
+        return OperationResult.Success;
     }
 
     private string VersionDirectory(string version) => Path.Combine(Root, version);
@@ -224,8 +218,6 @@ internal sealed class AgentPackageCache(IOptions<PathsOptions> paths, IReleaseSo
             FileHashing.TryDeleteDirectory(x.Dir);
         }
     }
-
-    private static string Sanitize(string s) => new(s.Where(c => !char.IsControl(c)).Take(200).ToArray());
 
     private sealed record PackageMetadata(string Version, long Size, string Sha256, DateTime AddedAtUtc, string Source);
 }

@@ -64,6 +64,7 @@ internal static class AgentLinkTestHelpers
         RefuseLinger = TimeSpan.FromMilliseconds(500),
         AdLinkInterval = TimeSpan.FromHours(1),
         RetentionFirstDelay = TimeSpan.FromHours(1),
+        StatusMinInterval = TimeSpan.FromMilliseconds(50),
     };
 
     public static Task<TestAgentServer> StartAsync(TestDatabase db, RecordingObserver? observer = null,

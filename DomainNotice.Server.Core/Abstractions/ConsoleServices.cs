@@ -142,8 +142,26 @@ public static class ConsoleRoles
 
 public enum SignInSource { Domain = 0, Local = 1 }
 
+/// <param name="IssuedAtUtc">When the sign-in succeeded; the session ends Console:SessionMaxHours later at the latest.</param>
+/// <param name="DirectoryObjectGuid">Domain: objectGUID of the user, for re-checking the session against the synced directory.</param>
+/// <param name="PasswordStamp">Local: changes when the password is reset, which ends existing sessions.</param>
 public sealed record SignInOutcome(bool Succeeded, string? UserName = null, string? DisplayName = null,
-    string? Role = null, SignInSource Source = SignInSource.Local, string? Error = null);
+    string? Role = null, SignInSource Source = SignInSource.Local, string? Error = null,
+    DateTime? IssuedAtUtc = null, Guid? DirectoryObjectGuid = null, string? PasswordStamp = null);
+
+/// <summary>What a Console session cookie (or open circuit) claims; re-checked by <see cref="IConsoleSessionValidator"/>.</summary>
+public sealed record ConsoleSession(string UserName, SignInSource Source, string Role, DateTime? IssuedAtUtc,
+    Guid? DirectoryObjectGuid, string? PasswordStamp);
+
+/// <summary>
+/// Decides whether a signed-in Console session is still valid: absolute lifetime, local account enabled with an
+/// unchanged password, domain user still present, enabled and in a group of the same role (synced directory).
+/// Never throws for database problems (logs and keeps the session); see the implementation for the rules.
+/// </summary>
+public interface IConsoleSessionValidator
+{
+    Task<bool> IsValidAsync(ConsoleSession session, CancellationToken ct = default);
+}
 
 public interface IAdminSignInService
 {
@@ -151,7 +169,7 @@ public interface IAdminSignInService
     bool LocalSignInEnabled { get; }
     /// <summary>Binds as the user over LDAP(S); must be in Directory:AdminGroups (Admin) or ViewerGroups (Viewer), nested groups count.</summary>
     Task<SignInOutcome> SignInDomainAsync(string userName, string password, string? remoteIp, CancellationToken ct = default);
-    /// <summary>Rate-limited per account and per IP.</summary>
+    /// <summary>Rate-limited per (account, IP), per IP and per account.</summary>
     Task<SignInOutcome> SignInLocalAsync(string userName, string password, string? remoteIp, CancellationToken ct = default);
     /// <summary>True when /account/setup may create the first local account: no directory and no local account.</summary>
     Task<bool> IsFirstRunSetupAllowedAsync(CancellationToken ct = default);
@@ -217,8 +235,7 @@ public interface IAgentPackageCache
     Task<AgentPackageInfo?> GetCurrentAsync(CancellationToken ct = default);
     Task<IReadOnlyList<AgentPackageInfo>> ListAsync(CancellationToken ct = default);
     Stream OpenRead(AgentPackageInfo package);
-    /// <summary>P13: import a locally built MSI for the server's version.</summary>
-    Task<OperationResult> ImportAsync(Stream msi, string fileName, string actor, CancellationToken ct = default);
+    // No import/upload: the cache is filled only from the release download, verified against SHA256SUMS.txt.
 }
 
 public interface IAgentUpdateService

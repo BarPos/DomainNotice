@@ -5,7 +5,8 @@ public static class BindNames
 {
     /// <summary>
     /// The name used for a simple bind. "user@domain", "DOMAIN\user" and DNs are used as given; a short name
-    /// becomes "name@domain-from-BaseDn" (dc=example,dc=local → name@example.local).
+    /// becomes "name@domain-from-BaseDn" (dc=example,dc=local → name@example.local). Console sign-in refuses DNs
+    /// before this is called (<see cref="IsAcceptedSignInName"/>); the service account (Directory:BindUser) may be one.
     /// </summary>
     public static string Format(string userName, string? baseDn)
     {
@@ -14,6 +15,19 @@ public static class BindNames
         if (trimmed.Contains('@') || trimmed.Contains('\\') || trimmed.Contains('=')) return trimmed;
         var domain = DistinguishedNames.DomainFromBaseDn(baseDn);
         return domain.Length == 0 ? trimmed : $"{trimmed}@{domain}";
+    }
+
+    /// <summary>
+    /// Console sign-in accepts "sam", "DOMAIN\sam" and "user@domain" only. DN-form names (anything with '=') are
+    /// refused: they could be re-spelled endlessly to get fresh rate-limit budgets.
+    /// </summary>
+    public static bool IsAcceptedSignInName(string? userName)
+    {
+        var trimmed = (userName ?? "").Trim();
+        if (trimmed.Length == 0 || trimmed.Contains('=') || trimmed.Any(char.IsControl)) return false;
+        var slash = trimmed.IndexOf('\\');
+        if (slash >= 0 && (slash == 0 || slash == trimmed.Length - 1 || trimmed.IndexOf('\\', slash + 1) >= 0)) return false;
+        return true;
     }
 
     /// <summary>"DOMAIN\user" → user, "user@domain" → user, "user" → user.</summary>
@@ -27,8 +41,24 @@ public static class BindNames
         return trimmed;
     }
 
-    /// <summary>Key for rate limiting domain sign-ins: the same account in any spelling shares one key.</summary>
-    public static string RateLimitKey(string userName) => SamAccountName(userName).ToLowerInvariant();
+    /// <summary>The "DOMAIN" of "DOMAIN\user"; null for other forms.</summary>
+    public static string? DomainPrefix(string userName)
+    {
+        var trimmed = (userName ?? "").Trim();
+        var slash = trimmed.IndexOf('\\');
+        return slash > 0 ? trimmed[..slash] : null;
+    }
+
+    /// <summary>
+    /// Key for rate limiting domain sign-ins. "CORP\alice" and "alice" share one key (the domain prefix is dropped;
+    /// only one domain is supported). A UPN keeps its own key, since its prefix need not be the sAMAccountName.
+    /// </summary>
+    public static string RateLimitKey(string userName)
+    {
+        var trimmed = (userName ?? "").Trim();
+        if (trimmed.Contains('@')) return "upn:" + trimmed.ToLowerInvariant();
+        return SamAccountName(trimmed).ToLowerInvariant();
+    }
 
     /// <summary>Parses an RFC 4532 "Who am I?" authzId ("u:DOMAIN\user" or "dn:CN=...").</summary>
     public static (string? NtName, string? Dn) ParseAuthzId(string? authzId)

@@ -122,15 +122,15 @@ Windows PC ── Agent service (LocalSystem) ────┘
 ### 3.4 Identity rule
 - **The computer** is identified only by the agent key presented in the TLS handshake. The server looks up the computer by that key's fingerprint. Any computer name or id inside a payload is ignored for identity, so one computer cannot send confirmations or status for another.
 - **Automatic AD confirmation.** The computer *name* is self-reported, so the link between an enrolled computer and its AD computer object is confirmed automatically. No admin action is needed (decided, D10), except for the conflicts described below (D5). It is confirmed by a Kerberos proof (steps 1–4), with name rules as the fallback (decided, D13).
-  1. After `Welcome`, the Agent service asks Windows for a Kerberos ticket to the server's service name (`DomainNotice/<server-fqdn>`). The service runs as LocalSystem, so the ticket is issued to the computer's own AD account (`PC$`). The ticket is bound to this TLS connection (channel binding), so it cannot be replayed on another one. The agent sends it in `ProveIdentity`.
+  1. After `Welcome`, the Agent service asks Windows for a Kerberos ticket to the server's service name (`DomainNotice/<server-fqdn>`). The service runs as LocalSystem, so the ticket is issued to the computer's own AD account (`PC$`). The ticket's authenticator is bound to the server's TLS certificate (tls-server-end-point channel binding), so it is useless against another server; on this server each authenticator is accepted once (replay cache), and the proof only links the key of the connection that sent it. The agent sends it in `ProveIdentity`.
   2. The server checks the ticket itself with the Kerberos.NET library (MIT licence), using keys derived from the bind account's password. A spike in build step 2 has to confirm that this library can check such a ticket and enforce the channel binding. The server does not contact a domain controller for this, so it still talks to the domain only over LDAP. The PC gets its ticket from its domain controller the normal Windows way.
   3. The ticket names the computer account (`PC$@REALM`). The server links the computer to that AD object (found by LDAP, stored by objectGUID) and uses the AD object, not the reported name, for Computer, ComputerGroup and OU targets.
-  4. If another enrolled key was linked to the same AD object, the link moves to the key that just proved it, and the old record is marked replaced. This also covers re-imaged machines (section 4).
+  4. If another enrolled key was linked to the same AD object, the link moves to the key that just proved it, and the old record is marked replaced. This also covers re-imaged machines (section 4). Exception: when the other record holds a Kerberos-proven link itself and was online within the last 7 days, the link does not move, because any code running as the machine account could get the same ticket. The newcomer goes to **Awaiting approval** (audited) and an admin decides.
   - One-time setup: register the service name on the bind account (`setspn -S DomainNotice/<server-fqdn> <bind-account>`). The PCs need to reach a domain controller, and clocks must be within 5 minutes (the normal Kerberos rule).
   - **Fallback**, also automatic, for when the service name is not set up, the PC is not in the domain, or the ticket fails:
     - the reported name is linked when exactly one AD computer has that name and no other key holds the link;
     - when another key already holds the link (typically a re-imaged machine), **that key keeps it**, and the newcomer is put on the **Awaiting approval** list in the Console (decided, D5). An admin decides there (section 9.2). Nothing is released automatically;
-    - if the newcomer later presents a Kerberos proof, steps 1–4 apply and it leaves the list by itself;
+    - if the newcomer later presents a Kerberos proof, steps 1–4 apply and it leaves the list by itself (unless the holder is itself proven and was online within 7 days, see step 4);
     - until it is linked, a computer receives only Everyone and User targets. For computers awaiting approval, the Console setting in section 4 can turn even those off.
   - The fallback is not proof. An enrolled machine can still claim the name of an AD computer that has no agent yet, and receive that computer's targets. Only the Kerberos proof closes this.
 - A connection with an unknown key may send only `Enroll`. Every other message is refused and the connection closed.
@@ -170,7 +170,7 @@ Password handling on the agent:
 
 ### 5.2 Session UI (`DomainNotice.Agent.Session`)
 - The service starts one Session process in every interactive user session, using `WTSQueryUserToken` and `CreateProcessAsUser`. No `HKLM\...\Run` autostart entry is used.
-- The Session process connects to the service over a local named pipe. The pipe ACL allows SYSTEM and that session's user only, and the service checks that the connecting process belongs to the expected session.
+- The Session process connects to the service over a local named pipe. The pipe ACL allows SYSTEM and that session's user only, and the service checks that the connecting process belongs to the expected session. The pipe name carries a random suffix per session and service start, which the service passes to the Session process on its command line, so no other account can create the name first.
 - **Tray icon** with a status line (connected or disconnected, server name), "About", and "Show pending announcement" when one is waiting. **No Exit item.**
 - If a user kills the Session process (for example in Task Manager), the service starts it again within a few seconds, and a pending announcement is shown again.
 - The announcement window is always on top, no close button, Esc and Alt+F4 are ignored, buttons unlock by `DismissRules`, and Markdown is rendered.
@@ -237,7 +237,7 @@ What the integration does. Item 1 is the domain sign-in, next to the local accou
 - `/account/setup` creates the first local account only when **no directory is configured and no local account exists**. Otherwise a signed-in admin creates local accounts in Settings, so an anonymous visitor can never create one.
 - The sign-in page has a choice: **Domain account** or **Local account**. Local accounts work when the directory is unreachable, so admins are never locked out. Agents keep receiving announcements from the synced data either way.
 - Settings → Local accounts: add, reset password, disable. Local accounts have full admin rights.
-- Passwords are PBKDF2-SHA256 hashes. Failed sign-ins are rate-limited per account and per IP.
+- Passwords are PBKDF2-SHA256 hashes. Failed sign-ins are rate-limited per (account, IP), per IP and, with a much higher limit, per account. A password reset or disabling ends the account's open sessions; every session ends `Console:SessionMaxHours` after sign-in.
 - `LocalAccounts:Enabled` (default `true`) turns local sign-in off for sites that don't want it. Doing so brings back the lockout risk when the directory is down.
 
 ---
@@ -356,7 +356,7 @@ Sign-in is a cookie after a domain or local sign-in, as in section 7.
 - The database is either an existing PostgreSQL server or one that the install script sets up on the same machine (section 11.5).
 - Migrations live in `DomainNotice.Server/Data/Migrations`, created with `dotnet ef migrations add`.
 - The server applies pending migrations at start (`Database.MigrateAsync()`). `DomainNotice.Server --migrate-only` applies them and exits; the install script and the updater use it.
-- Before migrations are applied during an update, a `pg_dump` backup is written to `/opt/domainnotice/backups/`.
+- Before migrations are applied during an update, a `pg_dump` backup is written to `/opt/domainnotice/backups/pre-update/` (root only).
 - `EnsureCreated` is not used.
 - The connection string, with the database password, is in the config file, readable only by root and the `domainnotice` user (section 11.5).
 
@@ -469,7 +469,7 @@ Steps:
    - `current`: a symlink to the running release;
    - `config/appsettings.Production.json`: owned by root, group `domainnotice`, mode 640;
    - `data/`: the agent-link key, the ASP.NET Data Protection key ring (`data/keys/dataprotection`, so sign-in cookies and encrypted settings survive restarts), cached packages and staged updates, owned by `domainnotice`, mode 700;
-   - `backups/`: database dumps;
+   - `backups/`: backup archives and, in `pre-update/`, database dumps; owned by root, mode 700 (root writes there, so the service user has no access);
    - logs go to the journal (`journalctl -u domainnotice`).
 6. **Service user:** a system user `domainnotice` with no login shell.
 7. **Console HTTPS:** the script asks for the port (default 443) and either the paths to an existing certificate and key, or generates a self-signed certificate.
@@ -522,7 +522,7 @@ These came up while planning. All of them were accepted in round 4, except P10 (
 - **P7 "Send announcement to selected computers"** from the Computers grid.
 - **P8 Delivery tracking and drafts.** A `Delivery` row per announcement, computer and user, with the time it was sent and shown (`Show`/`Shown` messages), plus a Draft status for announcements. P1 and P2 depend on it; without it, the agent works from the announcement id alone.
 - ~~P9 Server relays agent updates~~: accepted in round 3, now part of section 11.3.
-- **P13 Import a local agent MSI.** Upload a locally built MSI into the server's package cache from Settings, so first installs and agent updates work before the GitHub repository exists. Without it, the cache stays empty until then, and first installs use the MSI from `build-agent-msi.ps1` directly.
+- **P13 Import a local agent MSI.** *Removed in 1.0.5:* a Console upload let any Admin account put its own MSI in front of every agent. The package cache is filled only from the release download, verified against `SHA256SUMS.txt`; without GitHub the cache stays empty, and agents are installed and updated with the release MSI directly.
 - **P10 Signed releases** (deferred, not in the first version). Sign `SHA256SUMS.txt` with a project key whose public half is built into the Server and Agent, and Authenticode-sign the MSI. Updates are refused if the signature fails.
 - **P11 Automatic agent updates.** `Agents:AutoUpdate` (default off): after the server updates, it sends the update command to outdated agents by itself.
 - **P12 Release workflow.** A GitHub Actions workflow that builds the assets in section 11.4 when a `v<version>` tag is pushed.

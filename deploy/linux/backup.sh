@@ -3,16 +3,28 @@
 #
 #   backup.sh create [--output PATH]   one archive with the database, the configuration, the keys and data, and the
 #                                      running program. PATH: a folder or a file name ending in .tar.gz
-#                                      (default folder: /opt/domainnotice/backups).
+#                                      (default folder: /opt/domainnotice/backups). The folder and every folder
+#                                      above it must be owned by root and writable only by root.
 #   backup.sh restore FILE [--yes]     puts a backup back on this server: database, configuration, keys, data and
 #                                      program (the backup's version becomes the running one). A backup of the current
 #                                      state is made first. DomainNotice must be installed (install.sh) on this
-#                                      server: its database connection settings are kept, so a backup can also be
-#                                      restored onto a new server.
+#                                      server: its database connection settings, update.sh, backup.sh and systemd
+#                                      units are kept (never taken from a backup), so a backup can also be restored
+#                                      onto a new server.
 #   backup.sh list                     backups in /opt/domainnotice/backups
 #
 # The archive contains secrets (the agent-link key, the database password, encrypted settings): it is written with
 # mode 600 and owned by root. Keep copies somewhere safe, off this server.
+set -Eeuo pipefail
+
+HERE="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# The archive checks are shared with update.sh, installed next to this file (bin/) or next to it in a package.
+if [[ ! -f "$HERE/update.sh" || -L "$HERE/update.sh" ]]; then
+    printf 'ERROR: %s not found; run install.sh --repair --package FILE\n' "$HERE/update.sh" >&2
+    exit 1
+fi
+# shellcheck source=update.sh
+source "$HERE/update.sh"
 set -Eeuo pipefail
 
 DN_ROOT="${DN_ROOT:-/opt/domainnotice}"
@@ -23,13 +35,16 @@ FORMAT=1
 CONFIG="$DN_ROOT/config/appsettings.Production.json"
 UPDATE_ENV="$DN_ROOT/config/update.env"
 STATE="$DN_ROOT/config/install.state"
-WORK=""
+WORK="" OUT=""
 
 info() { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
-cleanup() { if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf -- "$WORK"; fi; }
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+cleanup() {
+    if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf -- "$WORK"; fi
+    if [[ -n "$OUT" && -d "$OUT" ]]; then rm -rf -- "$OUT"; fi
+}
 trap cleanup EXIT
 
 require_install() {
@@ -58,10 +73,21 @@ state_value() { # state_value FILE KEY
     sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n1
 }
 
+# write_root_file DEST OWNER MODE <CONTENT: temp file in the same root-owned folder, then rename (never writes
+# through a link at DEST).
+write_root_file() {
+    local dest="$1" tmp
+    tmp="$(mktemp "$(dirname -- "$dest")/.restore.XXXXXX")"
+    cat >"$tmp"
+    chown -h "$2" -- "$tmp"
+    chmod "$3" -- "$tmp"
+    mv -T -- "$tmp" "$dest"
+}
+
 # ------------------------------------------------------------------------------------------------ create
 
 do_create() {
-    local output="$DN_ROOT/backups"
+    local output=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --output) [[ $# -ge 2 ]] || die "--output needs a path"; output="$2"; shift ;;
@@ -73,17 +99,28 @@ do_create() {
     require_install
     load_db_env
 
-    local version stamp file
+    local version stamp dir name file
     version="$(current_version)"
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    if [[ "$output" == *.tar.gz ]]; then
-        file="$output"
-        mkdir -p -- "$(dirname -- "$file")"
-    else
-        mkdir -p -- "$output"
-        file="$output/domainnotice-backup-$version-$(hostname -s)-$stamp.tar.gz"
+    DN_ERROR=""
+    if [[ -z "$output" || "$output" == "$DN_ROOT/backups" || "$output" == "$DN_ROOT/backups/" ]]; then
+        # The default folder is root-only (it belonged to the service user before 1.0.5: taken over here).
+        dn_root_dir "$DN_ROOT/backups" || die "$DN_ERROR (run install.sh --repair)"
+        output="$DN_ROOT/backups"
     fi
-    [[ ! -e "$file" ]] || die "$file already exists"
+    if [[ "$output" == *.tar.gz ]]; then
+        dir="$(dirname -- "$output")"
+        name="$(basename -- "$output")"
+    else
+        dir="$output"
+        name="domainnotice-backup-$version-$(hostname -s)-$stamp.tar.gz"
+    fi
+    if [[ ! -e "$dir" && ! -L "$dir" ]]; then (umask 077; mkdir -p -- "$dir"); fi
+    # Root writes the archive into this folder: refuse one that anybody else can change (or a link).
+    dn_trusted_dir "$dir" || die "the backup folder is not safe: $DN_ERROR. Use a folder that only root can write to"
+    dir="$DN_TRUSTED_DIR"
+    file="$dir/$name"
+    [[ ! -e "$file" && ! -L "$file" ]] || die "$file already exists"
 
     WORK="$(mktemp -d /var/tmp/domainnotice-backup.XXXXXX)"
     chmod 700 "$WORK"
@@ -94,21 +131,30 @@ do_create() {
         die "pg_dump failed (is the client as new as the server? see PG_BIN in $UPDATE_ENV)"
 
     info "Collecting configuration, keys, data and the program ($version)"
+    # update.sh, backup.sh and the units are not included: a restore keeps the installed ones.
     local -a paths=("${DN_ROOT#/}/config" "${DN_ROOT#/}/data" "${DN_ROOT#/}/releases/$version")
-    [[ -d "$DN_ROOT/bin" ]] && paths+=("${DN_ROOT#/}/bin")
-    local u
-    for u in "${UNITS[@]}"; do [[ -f "$UNIT_DIR/$u" ]] && paths+=("${UNIT_DIR#/}/$u"); done
     # Staged self-update downloads are not worth keeping; everything else in data/ is (keys, packages).
-    tar --create --numeric-owner --file="$WORK/backup/files.tar" -C / \
-        --exclude="${DN_ROOT#/}/data/updates" "${paths[@]}"
+    # The server keeps running: a file in data/ (e.g. an agent package being downloaded) may change or disappear while
+    # tar reads it. tar then exits with 1, which still leaves a usable archive; 2 and above are real errors.
+    local rc=0
+    tar --create --numeric-owner --warning=no-file-changed --warning=no-file-removed --file="$WORK/backup/files.tar" \
+        -C / --exclude="${DN_ROOT#/}/data/updates" "${paths[@]}" || rc=$?
+    ((rc <= 1)) || die "tar failed ($rc) while collecting the files"
+    ((rc == 0)) || warn "some files in data/ changed while they were read (the server is running); the backup is still usable"
 
     printf '%s\n' "format=$FORMAT" "version=$version" "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         "host=$(hostname -f 2>/dev/null || hostname)" "database=$PGDATABASE" >"$WORK/backup/manifest.txt"
 
-    (umask 077; tar --create --gzip --file="$file.partial" -C "$WORK/backup" manifest.txt database.dump files.tar)
-    chown root:root "$file.partial"
-    chmod 600 "$file.partial"
-    mv -T -- "$file.partial" "$file"
+    # Built in a new root-only folder inside the destination (same file system), then renamed into place: nothing
+    # is opened, chowned or chmodded by a predictable name in the destination folder.
+    OUT="$(mktemp -d "$dir/.domainnotice-backup.XXXXXX")"
+    (umask 077; tar --create --gzip --file="$OUT/backup.tar.gz" -C "$WORK/backup" manifest.txt database.dump files.tar)
+    chown -h root:root -- "$OUT/backup.tar.gz"
+    chmod 600 -- "$OUT/backup.tar.gz"
+    [[ ! -e "$file" && ! -L "$file" ]] || die "$file already exists"
+    mv -T -- "$OUT/backup.tar.gz" "$file"
+    rmdir -- "$OUT"
+    OUT=""
     info "Backup written: $file ($(du -h "$file" | cut -f1))"
     echo "It contains secrets (keys, database password): keep a copy somewhere safe, off this server."
 }
@@ -129,17 +175,34 @@ do_restore() {
     [[ -n "$file" ]] || die "usage: $0 restore FILE [--yes]"
     [[ -f "$file" ]] || die "$file not found"
     require_install
+    # update.sh, backup.sh and the units run as root: they stay this server's, never the backup's.
+    local u
+    for u in "${UNITS[@]}"; do
+        [[ -f "$UNIT_DIR/$u" ]] || die "$UNIT_DIR/$u is missing: run install.sh --repair --package FILE first"
+    done
+    [[ -f "$DN_ROOT/bin/update.sh" ]] || warn "$DN_ROOT/bin/update.sh is missing: self-updates fail until install.sh --repair --package FILE"
 
     WORK="$(mktemp -d /var/tmp/domainnotice-restore.XXXXXX)"
     chmod 700 "$WORK"
-    tar --extract --gzip --file="$file" -C "$WORK" manifest.txt database.dump files.tar ||
+    local listing m
+    listing="$(tar --list --verbose --gzip --file="$file")" || die "$file is not a DomainNotice backup"
+    DN_ERROR=""
+    dn_check_member_types <<<"$listing" || die "$file: $DN_ERROR"
+    tar --extract --gzip --no-same-owner --no-same-permissions --file="$file" -C "$WORK" manifest.txt database.dump files.tar ||
         die "$file is not a DomainNotice backup"
+    for m in manifest.txt database.dump files.tar; do
+        [[ -f "$WORK/$m" && ! -L "$WORK/$m" ]] || die "$file: $m is not a regular file"
+    done
     [[ "$(state_value "$WORK/manifest.txt" format)" == "$FORMAT" ]] || die "unsupported backup format"
     local bversion
     bversion="$(state_value "$WORK/manifest.txt" version)"
     [[ "$bversion" =~ ^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$ ]] || die "the backup has no valid version"
-    # Refuse anything that would land outside the expected paths.
+
+    # Refuse anything that would land outside the expected paths. bin/ and the units are accepted (backups made
+    # before 1.0.5 have them) but never extracted.
     local entry
+    listing="$(tar --list --file="$WORK/files.tar")" || die "the backup's files.tar is broken"
+    dn_check_member_names <<<"$listing" || die "unsafe backup: $DN_ERROR"
     while IFS= read -r entry; do
         case "$entry" in
             "${DN_ROOT#/}/config"|"${DN_ROOT#/}/config/"*|"${DN_ROOT#/}/data"|"${DN_ROOT#/}/data/"*) ;;
@@ -148,14 +211,33 @@ do_restore() {
             *) die "unexpected path in the backup: $entry" ;;
         esac
         [[ "$entry" != *..* ]] || die "unexpected path in the backup: $entry"
-    done < <(tar --list --file="$WORK/files.tar")
+    done <<<"$listing"
+    # Only regular files, folders and links; no hard links, devices, FIFOs, setuid or setgid entries.
+    listing="$(tar --list --verbose --file="$WORK/files.tar")" || die "the backup's files.tar is broken"
+    dn_check_member_types <<<"$listing" || die "unsafe backup: $DN_ERROR"
+    dn_check_member_modes <<<"$listing" || die "unsafe backup: $DN_ERROR"
+
+    # Unpack and check everything before this server is touched.
+    mkdir "$WORK/root"
+    local src="$WORK/root${DN_ROOT}"
+    tar --extract --no-same-owner --preserve-permissions --file="$WORK/files.tar" -C "$WORK/root" \
+        "${DN_ROOT#/}/config" "${DN_ROOT#/}/data" "${DN_ROOT#/}/releases/$bversion" ||
+        die "the backup lacks config, data or releases/$bversion"
+    dn_check_tree "$WORK/root" || die "unsafe backup: $DN_ERROR"
+    for m in config data "releases/$bversion"; do
+        [[ -d "$src/$m" && ! -L "$src/$m" ]] || die "the backup's $m is not a folder"
+    done
+    # Root rewrites files in config/ after the restore: only plain files and folders there.
+    [[ -z "$(find "$src/config" ! -type f ! -type d -print -quit)" ]] || die "unsafe backup: links or special files in config/"
+    [[ -f "$src/releases/$bversion/DomainNotice.Server" && ! -L "$src/releases/$bversion/DomainNotice.Server" ]] ||
+        die "the backup's program has no DomainNotice.Server"
 
     echo "Backup:  $(basename "$file")"
     sed 's/^/         /' "$WORK/manifest.txt"
     echo "This server: DomainNotice $(current_version)"
     echo
     echo "Restoring REPLACES this server's database, configuration, keys, data and program with the backup's."
-    echo "The database connection settings of this server are kept."
+    echo "The database connection settings, update.sh, backup.sh and the systemd units of this server are kept."
     if [[ $yes -eq 0 ]]; then
         local answer
         read -r -p "Type 'restore' to continue: " answer </dev/tty || die "not confirmed"
@@ -177,9 +259,6 @@ do_restore() {
     systemctl stop domainnotice-update.path domainnotice.service 2>/dev/null || true
 
     info "Restoring files"
-    mkdir "$WORK/root"
-    tar --extract --numeric-owner --preserve-permissions --file="$WORK/files.tar" -C "$WORK/root"
-    local src="$WORK/root${DN_ROOT}"
     rm -rf -- "${DN_ROOT:?}/config" "${DN_ROOT:?}/data"
     cp -a -- "$src/config" "$DN_ROOT/config"
     cp -a -- "$src/data" "$DN_ROOT/data"
@@ -187,42 +266,52 @@ do_restore() {
     rm -rf -- "${DN_ROOT:?}/releases/$bversion"
     mkdir -p "$DN_ROOT/releases"
     cp -a -- "$src/releases/$bversion" "$DN_ROOT/releases/$bversion"
-    if [[ -d "$src/bin" ]]; then rm -rf -- "${DN_ROOT:?}/bin"; cp -a -- "$src/bin" "$DN_ROOT/bin"; fi
-    local u
-    for u in "${UNITS[@]}"; do
-        [[ -f "$WORK/root${UNIT_DIR}/$u" ]] && install -o root -g root -m 644 "$WORK/root${UNIT_DIR}/$u" "$UNIT_DIR/$u"
-    done
     ln -sfn "releases/$bversion" "$DN_ROOT/.current.new" && mv -T -- "$DN_ROOT/.current.new" "$DN_ROOT/current"
 
     # Keep this server's database settings (a backup from another server has another password).
-    printf '%s\n' "$keep_env" >"$UPDATE_ENV"
-    if [[ -n "$keep_cs" ]]; then
-        awk -v line="$keep_cs" '/"ConnectionStrings"/ && !done { print line; done = 1; next } { print }' "$CONFIG" >"$CONFIG.new"
-        mv -T -- "$CONFIG.new" "$CONFIG"
+    printf '%s\n' "$keep_env" | write_root_file "$UPDATE_ENV" root:root 600
+    if [[ -n "$keep_cs" && -f "$CONFIG" ]]; then
+        awk -v line="$keep_cs" '/"ConnectionStrings"/ && !done { print line; done = 1; next } { print }' "$CONFIG" |
+            write_root_file "$CONFIG" "root:$SERVICE_USER" 640
     fi
-    if [[ -n "$keep_state" && -f "$STATE" ]]; then
-        local k v
-        for k in DB_MODE DB_NAME DB_USER; do
-            v="$(printf '%s\n' "$keep_state" | sed -n "s/^$k=//p" | head -n1)"
-            [[ -n "$v" ]] || continue
-            if grep -q "^$k=" "$STATE"; then sed -i "s|^$k=.*|$k=$v|" "$STATE"; else echo "$k=$v" >>"$STATE"; fi
-        done
-    fi
-    # The health check follows the restored Console mode and port.
+    # install.state: the backup's values (Console mode, port, name) when they are valid, this server's database
+    # settings, and this server's values for anything missing or invalid.
+    local restored_state="" line k v new_state=""
+    if [[ -f "$STATE" ]]; then restored_state="$(cat "$STATE")"; fi
+    while IFS= read -r line; do
+        [[ "$line" == *=* ]] || continue
+        k="${line%%=*}"; v="${line#*=}"
+        case "$k" in
+            DB_MODE|DB_NAME|DB_USER) continue ;;
+            CONSOLE_PORT) [[ "$v" =~ ^[0-9]{1,5}$ ]] || continue ;;
+            CONSOLE_MODE) [[ "$v" == http || "$v" == https ]] || continue ;;
+            SERVER_NAME) [[ "$v" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || continue ;;
+            [A-Z_]*) [[ "$k" =~ ^[A-Z_]+$ && "$v" =~ ^[A-Za-z0-9.:_-]*$ ]] || continue ;;
+            *) continue ;;
+        esac
+        new_state+="$line"$'\n'
+    done <<<"$restored_state"
+    for k in DB_MODE DB_NAME DB_USER CONSOLE_PORT CONSOLE_MODE SERVER_NAME; do
+        [[ "$new_state" == *$'\n'"$k="* || "$new_state" == "$k="* ]] && continue
+        v="$(printf '%s\n' "$keep_state" | sed -n "s/^$k=//p" | head -n1)"
+        [[ -z "$v" ]] || new_state+="$k=$v"$'\n'
+    done
+    printf '%s' "$new_state" | write_root_file "$STATE" root:root 600
+    # The health check follows the restored Console mode and port (both validated above).
     local mode port scheme
     mode="$(state_value "$STATE" CONSOLE_MODE)"; port="$(state_value "$STATE" CONSOLE_PORT)"
-    if [[ -n "$port" ]]; then
+    if [[ "$port" =~ ^[0-9]{1,5}$ ]]; then
         scheme=https; [[ "$mode" == http ]] && scheme=http
-        sed -i "s|^HEALTH_URL=.*|HEALTH_URL=$scheme://127.0.0.1:$port/healthz|" "$UPDATE_ENV"
+        sed "s|^HEALTH_URL=.*|HEALTH_URL=$scheme://127.0.0.1:$port/healthz|" "$UPDATE_ENV" | write_root_file "$UPDATE_ENV" root:root 600
     fi
 
-    # Owners and modes as install.sh sets them.
-    chown -R root:"$SERVICE_USER" "$DN_ROOT/config"; chmod 750 "$DN_ROOT/config"
+    # Owners and modes as install.sh sets them; no setuid or setgid bits anywhere (links are not followed).
+    chown -hR root:"$SERVICE_USER" "$DN_ROOT/config"; chmod 750 "$DN_ROOT/config"
     find "$DN_ROOT/config" -type f -exec chmod 640 {} +
     for f in "$UPDATE_ENV" "$STATE"; do [[ -f "$f" ]] && { chown root:root "$f"; chmod 600 "$f"; }; done
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$DN_ROOT/data"; chmod 700 "$DN_ROOT/data"
-    chown -hR root:root "$DN_ROOT/releases/$bversion"; chmod -R go-w "$DN_ROOT/releases/$bversion"
-    [[ -d "$DN_ROOT/bin" ]] && { chown -R root:root "$DN_ROOT/bin"; chmod 755 "$DN_ROOT/bin"/*.sh 2>/dev/null || true; }
+    chown -hR "$SERVICE_USER:$SERVICE_USER" "$DN_ROOT/data"; chmod 700 "$DN_ROOT/data"
+    chmod -R ug-s "$DN_ROOT/data"
+    chown -hR root:root "$DN_ROOT/releases/$bversion"; chmod -R go-w,ug-s "$DN_ROOT/releases/$bversion"
 
     info "Restoring the database $PGDATABASE"
     load_db_env

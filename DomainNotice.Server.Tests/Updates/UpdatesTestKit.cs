@@ -119,11 +119,14 @@ internal sealed class UpdatesKit : IAsyncDisposable
         return ctx.AgentUpdateTasks.Single(t => t.Id == id);
     }
 
-    /// <summary>Imports an MSI-looking file of <paramref name="size"/> bytes as the package for the server's version.</summary>
+    /// <summary>
+    /// Stores an MSI-looking file of <paramref name="size"/> bytes as the package for the server's version, through the
+    /// download's checks (SHA-256, signature, prune). Test-only seeding: the product has no upload path.
+    /// </summary>
     public async Task<(AgentPackageInfo Info, byte[] Bytes)> SeedPackageAsync(int size = 600_000)
     {
         var bytes = FakeMsi(size);
-        var r = await Cache.ImportAsync(new MemoryStream(bytes), "DomainNotice.Agent.msi", "test");
+        var r = await Cache.StoreVerifiedAsync(new MemoryStream(bytes), Convert.ToHexStringLower(SHA256.HashData(bytes)), "test");
         Assert.True(r.Ok, r.Error);
         return ((await Cache.GetCurrentAsync())!, bytes);
     }

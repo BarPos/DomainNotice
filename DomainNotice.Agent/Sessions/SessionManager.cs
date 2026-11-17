@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using DomainNotice.Agent.Logic;
+using DomainNotice.Shared.LocalIpc;
 using DomainNotice.Shared.Protocol;
 
 namespace DomainNotice.Agent.Sessions;
@@ -113,7 +114,13 @@ public sealed class SessionManager : BackgroundService, ISessionsSource
                     continue;
                 }
 
-                worker = new SessionWorker(session.SessionId, session.UserName, new SessionPipeHost(session.SessionId, session.UserName, sid, _router, _logger), _logger, stoppingToken);
+                // A new random suffix (128 bits) for every session and every service start: part of the session's pipe
+                // name and passed only to its Session UI, so no other account can create the name before we do. Not
+                // shared between sessions: a user could otherwise read it from their own Session UI and squat the
+                // pipe of a session that has not started yet.
+                var pipeSuffix = LocalPipe.NewSuffix();
+                worker = new SessionWorker(session.SessionId, session.UserName, pipeSuffix,
+                    new SessionPipeHost(session.SessionId, session.UserName, sid, pipeSuffix, _router, _logger), _logger, stoppingToken);
                 _workers[session.SessionId] = worker;
             }
 
@@ -140,7 +147,7 @@ public sealed class SessionManager : BackgroundService, ISessionsSource
         foreach (var worker in _workers.Values) worker.Stop(killUi: true);
         _workers.Clear();
 
-        // Also stop instances this process did not start (adopted ones, or leftovers), so an MSI upgrade can
+        // Also stop instances this process did not start (leftovers, or ones started by hand), so an MSI upgrade can
         // replace the files. The service starts them again when it comes back.
         foreach (var process in SessionUiLauncher.FindAll())
         {
@@ -180,15 +187,17 @@ public sealed class SessionManager : BackgroundService, ISessionsSource
     {
         private readonly int _sessionId;
         private readonly string _userName;
+        private readonly string _pipeSuffix;
         private readonly ILogger _logger;
         private readonly CancellationTokenSource _cts;
         private readonly LaunchThrottle _throttle = new();
         private Process? _process;
 
-        public SessionWorker(int sessionId, string userName, SessionPipeHost pipe, ILogger logger, CancellationToken stoppingToken)
+        public SessionWorker(int sessionId, string userName, string pipeSuffix, SessionPipeHost pipe, ILogger logger, CancellationToken stoppingToken)
         {
             _sessionId = sessionId;
             _userName = userName;
+            _pipeSuffix = pipeSuffix;
             _logger = logger;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
             _ = Task.Run(async () =>
@@ -228,19 +237,30 @@ public sealed class SessionManager : BackgroundService, ISessionsSource
                 _throttle.Exited(nowUtc);
             }
 
-            var running = SessionUiLauncher.FindRunning(_sessionId);
-            if (running is not null)
+            if (!_throttle.CanStart(nowUtc)) return;
+
+            // A Session UI this worker did not start (left over from an earlier service start, or started by hand
+            // with a made-up suffix) does not know this session's pipe name and holds the single-instance mutex: stop
+            // it, so the copy started below can take over. Never adopted.
+            if (SessionUiLauncher.FindRunning(_sessionId) is { } stale)
             {
-                _logger.LogInformation("Session {SessionId}: adopted running Session UI (pid {Pid}).", _sessionId, running.Id);
-                _process = running;
-                _throttle.Started(nowUtc);
-                return;
+                using (stale)
+                {
+                    _logger.LogInformation("Session {SessionId}: stopping a Session UI this service did not start (pid {Pid}).", _sessionId, stale.Id);
+                    try
+                    {
+                        stale.Kill();
+                        stale.WaitForExit(TimeSpan.FromSeconds(3));
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+                    {
+                    }
+                }
             }
 
-            if (!_throttle.CanStart(nowUtc)) return;
             try
             {
-                _process = SessionUiLauncher.Start(_sessionId);
+                _process = SessionUiLauncher.Start(_sessionId, _pipeSuffix);
                 _throttle.Started(nowUtc);
                 _logger.LogInformation("Session {SessionId} ({User}): started Session UI (pid {Pid}).", _sessionId, _userName, _process.Id);
             }

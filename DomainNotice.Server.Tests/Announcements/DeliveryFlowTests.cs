@@ -237,6 +237,7 @@ public class DeliveryFlowTests(PostgresFixture pg)
     public async Task Directory_targets_resolve_through_synced_tables()
     {
         await using var h = await AnnouncementHarness.CreateAsync(pg, directory: true);
+        await h.Settings.SetAsync(SettingKeys.DirectoryNetBiosName, "CORP", "test", h.Ct); // stored by the directory sync
         var ou = await h.AddDirectoryObjectAsync(DirectoryObjectKind.OrganizationalUnit, "OU=Sales,DC=corp,DC=example");
         var alice = await h.AddDirectoryObjectAsync(DirectoryObjectKind.User, "CN=Alice,OU=Staff,OU=Sales,DC=corp,DC=example", "alice", "alice@corp.example");
         var bob = await h.AddDirectoryObjectAsync(DirectoryObjectKind.User, "CN=Bob,OU=IT,DC=corp,DC=example", "bob");
@@ -267,6 +268,29 @@ public class DeliveryFlowTests(PostgresFixture pg)
         Assert.Empty(c2.SentOf<Show>());
         _ = alice; _ = carol;
     }
+    [Fact]
+    public async Task Local_account_with_a_domain_user_name_gets_neither_name_nor_ad_targets()
+    {
+        await using var h = await AnnouncementHarness.CreateAsync(pg, directory: true);
+        await h.Settings.SetAsync(SettingKeys.DirectoryNetBiosName, "CORP", "sync", h.Ct);
+        var alice = await h.AddDirectoryObjectAsync(DirectoryObjectKind.User, "CN=Alice,OU=Staff,DC=corp,DC=example", "alice", "alice@corp.example");
+        var group = await h.AddDirectoryObjectAsync(DirectoryObjectKind.Group, "CN=Staff,DC=corp,DC=example", "staff");
+        await h.AddTransitiveMembershipAsync(group, alice);
+        // With a directory, user targets are chosen from it; the reported name is matched by sAMAccountName.
+        var byUser = await h.SaveAsync(AnnouncementHarness.Model("ByUser", start: h.Now.AddMinutes(-20), targets: new TargetEdit { Kind = TargetKind.User, DirectoryObjectGuid = alice }));
+        var byGroup = await h.SaveAsync(AnnouncementHarness.Model("ByGroup", start: h.Now.AddMinutes(-10), targets: new TargetEdit { Kind = TargetKind.UserGroup, DirectoryObjectGuid = group }));
+        var pc = await h.AddComputerAsync("PC01");
+
+        // PC01\alice is a local account on PC01, not CORP\alice.
+        var local = await h.OnlineAsync(pc, @"PC01\alice");
+        Assert.Empty(local.SentOf<Show>());
+
+        var pc2 = await h.AddComputerAsync("PC02");
+        var domain = await h.OnlineAsync(pc2, @"CORP\alice");
+        Assert.Equal(byUser, Assert.Single(domain.SentOf<Show>()).Announcement.Id);
+        _ = byGroup;
+    }
+
     [Fact]
     public async Task Registration_shares_one_instance_per_area_service()
     {

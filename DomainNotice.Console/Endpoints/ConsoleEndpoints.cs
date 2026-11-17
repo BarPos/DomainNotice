@@ -2,15 +2,13 @@ using DomainNotice.Console.Auth;
 using DomainNotice.Console.Grid;
 using DomainNotice.Console.Lists;
 using DomainNotice.Console.Services;
-using System.Text;
 using DomainNotice.Server.Abstractions;
+using DomainNotice.Server.Common;
 using DomainNotice.Server.Data;
-using DomainNotice.Shared;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,13 +18,11 @@ namespace DomainNotice.Console.Endpoints;
 
 /// <summary>
 /// Plain HTTP endpoints for what interactive Blazor pages cannot do: setting and clearing the sign-in cookie,
-/// file downloads and the MSI upload. Form posts validate the antiforgery token explicitly.
+/// file downloads. Form posts validate the antiforgery token explicitly. There is no upload endpoint: the agent MSI
+/// only ever comes from the release download (verified against SHA256SUMS.txt) into the server's package cache.
 /// </summary>
 internal static class ConsoleEndpoints
 {
-    /// <summary>P13 upload limit. Agent MSIs are a few MB; this leaves plenty of room.</summary>
-    public const long MaxMsiBytes = 256L * 1024 * 1024;
-
     public const string GenericSignInError = "Sign-in failed. Check the account type, user name and password.";
 
     public static void MapConsoleEndpoints(this IEndpointRouteBuilder app)
@@ -46,10 +42,6 @@ internal static class ConsoleEndpoints
         app.MapGet("/export/{list}.csv", ExportGridAsync).RequireAuthorization(ConsoleAuth.ViewerPolicy);
 
         app.MapGet("/download/agent-msi", DownloadMsiAsync).RequireAuthorization(ConsoleAuth.ViewerPolicy);
-        app.MapPost("/settings/agent-package", UploadMsiAsync)
-            .RequireAuthorization(ConsoleAuth.AdminPolicy)
-            .WithMetadata(new RequestSizeLimitAttribute(MaxMsiBytes + 1024 * 1024),
-                new RequestFormLimitsAttribute { MultipartBodyLengthLimit = MaxMsiBytes });
     }
 
     private static async Task<IResult> LoginAsync(HttpContext http, IAntiforgery antiforgery, IAdminSignInService signIn,
@@ -94,7 +86,8 @@ internal static class ConsoleEndpoints
 
         await http.SignInAsync(ConsoleAuth.Scheme, ConsoleAuth.CreatePrincipal(outcome),
             new AuthenticationProperties { IsPersistent = false, AllowRefresh = true });
-        return Results.Redirect(returnUrl);
+        // LocalRedirect refuses anything that is not a local URL, a second check behind SafeReturnUrl.
+        return Results.LocalRedirect(returnUrl);
     }
 
     private static async Task<IResult> LogoutAsync(HttpContext http, IAntiforgery antiforgery)
@@ -127,25 +120,17 @@ internal static class ConsoleEndpoints
         var query = GridQuery.Parse(http.Request.Query);
         var scope = grid.ScopeKeys.ToDictionary(k => k, k => (string?)http.Request.Query[k].ToString());
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var bytes = TranslateHeader(await grid.ExportCsvAsync(new GridContext(db, scope, time.GetUtcNow().UtcDateTime, services), query, ct), T);
+        var bytes = await grid.ExportCsvAsync(new GridContext(db, scope, time.GetUtcNow().UtcDateTime, services), query,
+            CsvStyleFor(T), ct);
         var stamp = time.GetUtcNow().UtcDateTime.ToString("yyyyMMdd-HHmm");
         return Results.File(bytes, "text/csv; charset=utf-8", $"{grid.Name}-{stamp}.csv");
     }
 
     /// <summary>
-    /// The header row of a grid CSV in the Console language (list labels are English in <see cref="ConsoleLists"/>).
-    /// Data rows stay as they are. No English label contains a comma or a quote, so a plain split is enough.
+    /// Grid CSVs in the Console language: header labels translated before writing (list labels are English in
+    /// <see cref="ConsoleLists"/>; data rows stay as they are) and the language's list separator.
     /// </summary>
-    private static byte[] TranslateHeader(byte[] csv, Texts T)
-    {
-        var preamble = Encoding.UTF8.GetPreamble();
-        var start = csv.AsSpan().StartsWith(preamble) ? preamble.Length : 0;
-        var end = csv.AsSpan(start).IndexOf("\r\n"u8);
-        if (end < 0) return csv;
-        var header = Encoding.UTF8.GetString(csv, start, end);
-        var translated = Csv.Write(header.Split(',').Select(label => T[label]), []);
-        return [.. translated, .. csv.AsSpan(start + end + 2)];
-    }
+    internal static CsvStyle CsvStyleFor(Texts T) => new(CsvFormat.SeparatorFor(T.Language), label => T[label]);
 
     private static async Task<IResult> DownloadMsiAsync(IAgentPackageCache cache, Texts T, CancellationToken ct)
     {
@@ -154,38 +139,18 @@ internal static class ConsoleEndpoints
         return Results.Stream(cache.OpenRead(package), "application/x-msi", $"DomainNotice.Agent-{package.Version}-x64.msi");
     }
 
-    private static async Task<IResult> UploadMsiAsync(HttpContext http, IAntiforgery antiforgery, IAgentPackageCache cache, Texts T)
-    {
-        if (!await antiforgery.IsRequestValidAsync(http)) return Results.BadRequest();
-        string Back(string message, bool ok) =>
-            $"/settings?tab=agent&{(ok ? "imported" : "importError")}={Uri.EscapeDataString(message)}";
-        IFormCollection form;
-        try
-        {
-            form = await http.Request.ReadFormAsync(http.RequestAborted);
-        }
-        catch (Exception ex) when (ex is InvalidDataException or BadHttpRequestException)
-        {
-            return Results.Redirect(Back(T.F("The file is larger than {0} MB.", MaxMsiBytes / (1024 * 1024)), false));
-        }
-        var file = form.Files["file"];
-        if (file is null || file.Length == 0) return Results.Redirect(Back(T["Choose an MSI file."], false));
-        if (!file.FileName.EndsWith(".msi", StringComparison.OrdinalIgnoreCase)) return Results.Redirect(Back(T["Only .msi files can be imported."], false));
-        if (file.Length > MaxMsiBytes) return Results.Redirect(Back(T["The file is too large."], false));
-
-        var actor = http.User.Identity?.Name ?? "unknown";
-        await using var stream = file.OpenReadStream();
-        var result = await cache.ImportAsync(stream, Path.GetFileName(file.FileName), actor, http.RequestAborted);
-        return Results.Redirect(result.Ok
-            ? Back(T.F("Imported {0} for version {1}.", Path.GetFileName(file.FileName), AppVersion.Current), true)
-            : Back(T.Maybe(result.Error) ?? T["The package could not be imported."], false));
-    }
-
-    /// <summary>Only local paths ("/x", not "//host" or "/\host").</summary>
+    /// <summary>
+    /// Only local paths: one leading '/', then not '/' ("//host"), no '\' anywhere ("/\host"; browsers read '\' as
+    /// '/') and no control characters anywhere. Browsers drop tab, CR and LF inside a URL, so "/&lt;TAB&gt;/host" would
+    /// become "//host"; Kestrel lets a tab through in a header value. Anything else, and the /account/ pages, give "/".
+    /// Used for the hidden field of the sign-in page and for the redirect after sign-in.
+    /// </summary>
     public static string SafeReturnUrl(string? url)
     {
         if (string.IsNullOrWhiteSpace(url)) return "/";
-        if (!url.StartsWith('/') || url.StartsWith("//") || url.StartsWith("/\\")) return "/";
+        if (url[0] != '/' || (url.Length > 1 && url[1] == '/')) return "/";
+        foreach (var c in url)
+            if (c < 0x20 || c == 0x7F || c == '\\') return "/";
         if (url.StartsWith("/account/", StringComparison.OrdinalIgnoreCase)) return "/";
         return url;
     }

@@ -23,6 +23,7 @@ public static class AgentLinkServiceCollectionExtensions
         services.TryAddSingleton<AgentObservers>();
         services.TryAddSingleton<IAgentEvents>(sp => sp.GetRequiredService<AgentObservers>());
 
+        services.TryAddSingleton<InventoryLimiter>();
         services.TryAddSingleton<ComputerInventory>();
         services.TryAddSingleton<Enrolment>();
         services.TryAddSingleton<IEnrolmentAdmin>(sp => sp.GetRequiredService<Enrolment>());
@@ -31,6 +32,7 @@ public static class AgentLinkServiceCollectionExtensions
         services.TryAddSingleton<ComputerAdminService>();
         services.TryAddSingleton<IComputerAdminService>(sp => sp.GetRequiredService<ComputerAdminService>());
         services.TryAddSingleton<AgentProtocol>();
+        services.TryAddSingleton<ConnectionLimiter>();
 
         services.TryAddSingleton<AgentListener>();
         services.TryAddSingleton<OfflineSweeper>();

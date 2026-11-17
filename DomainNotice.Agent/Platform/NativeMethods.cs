@@ -166,6 +166,34 @@ internal static class NativeMethods
         return (int)session;
     }
 
+    // ---- files -------------------------------------------------------------------------------
+
+    // BY_HANDLE_FILE_INFORMATION; Pack = 4 because FILETIME is two DWORDs (4-byte aligned), not an 8-byte integer.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct ByHandleFileInformation
+    {
+        public uint FileAttributes;
+        public long CreationTime;
+        public long LastAccessTime;
+        public long LastWriteTime;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetFileInformationByHandle(SafeFileHandle file, out ByHandleFileInformation information);
+
+    /// <summary>Number of hard links (names) of an open file.</summary>
+    public static uint GetLinkCount(SafeFileHandle file)
+    {
+        if (!GetFileInformationByHandle(file, out var info)) throw LastError("GetFileInformationByHandle");
+        return info.NumberOfLinks;
+    }
+
     // ---- DPAPI -------------------------------------------------------------------------------
 
     private const int CryptProtectUiForbidden = 0x1;

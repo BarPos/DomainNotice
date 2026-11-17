@@ -15,7 +15,7 @@ journalctl -u domainnotice -f              # server log
 journalctl -u domainnotice-update          # self-update log
 ```
 
-The unit runs as `domainnotice`, with `NoNewPrivileges`, `ProtectSystem=strict` (writable: `data/`, `backups/`),
+The unit runs as `domainnotice`, with `NoNewPrivileges`, `ProtectSystem=strict` (writable: `data/` only),
 `ProtectHome`, `PrivateTmp`, `ProtectProc=invisible`, a restricted set of address families, and
 `CAP_NET_BIND_SERVICE` only, so it can listen on port 443.
 
@@ -48,7 +48,10 @@ Other clients get 404. `update.sh` uses it.
 - the **database**, as a `pg_dump`;
 - the **configuration**: `config/`, including the Console certificate;
 - the **keys and data**: `data/`, including the agent-link key and the Data Protection keys;
-- the **running program**: `releases/<version>/`, `bin/` and the systemd units.
+- the **running program**: `releases/<version>/`.
+
+`bin/` (`update.sh`, `backup.sh`) and the systemd units run as root and are not part of a backup: a restore always
+keeps the ones installed on the server. Older archives that contain them are accepted, but those files are ignored.
 
 ```sh
 sudo /opt/domainnotice/bin/backup.sh create                         # → /opt/domainnotice/backups/domainnotice-backup-<version>-<host>-<time>.tar.gz
@@ -57,16 +60,25 @@ sudo /opt/domainnotice/bin/backup.sh list
 sudo /opt/domainnotice/bin/backup.sh restore /mnt/nas/domainnotice-backup-1.0.2-notice-20261116T020000Z.tar.gz
 ```
 
+- **Where:** `/opt/domainnotice/backups/` is root-only (root:root 700). An `--output` folder must be one that only
+  root can change: it and every folder above it owned by root and not writable by group or others, and not a
+  symbolic link. `/tmp`, or a folder owned by another user, is refused. The archive is built in a new private
+  folder inside the destination and then renamed into place.
 - **Restore** replaces this server's database, configuration, keys, data and program with the backup's, and makes the
-  backup's version the running one. It writes a backup of the current state first (to `/opt/domainnotice/backups/`),
-  asks you to type `restore` (or `--yes`), then starts the server and waits for it to answer.
-- **Moving to a new server:** install DomainNotice there with `install.sh`, then restore. The new server's database
-  connection settings are kept, so a backup from another server works. Point DNS (or `SERVERHOST`) at the new server.
-  Agents keep working, because the agent-link key comes from the backup.
+  backup's version the running one. It first checks the whole archive and refuses it if anything is wrong: paths
+  outside the expected folders, hard links, devices, FIFOs, setuid or setgid entries, links pointing outside the
+  backup, and any link in `config/`. Then it writes a backup of the current state (to `/opt/domainnotice/backups/`),
+  asks you to type `restore` (or `--yes`), starts the server and waits for it to answer.
+- **Moving to a new server:** first install DomainNotice there with `install.sh`, from the same version as the backup
+  (this installs `update.sh`, `backup.sh` and the units from a verified package), then restore. The new server's
+  database connection settings are kept, so a backup from another server works. Point DNS (or `SERVERHOST`) at the
+  new server. Agents keep working, because the agent-link key comes from the backup.
 - **Secrets:** archives contain the agent-link key and the database password. They are written with mode 600, owned by
   root. Keep copies off the server, for example in a nightly cron job:
-  `0 3 * * * root /opt/domainnotice/bin/backup.sh create --output /mnt/nas/domainnotice/`.
-- **Before updates:** `update.sh` also writes a database dump to `/opt/domainnotice/backups/` before every update.
+  `0 3 * * * root /opt/domainnotice/bin/backup.sh create --output /mnt/nas/domainnotice/` (the mount point must be
+  owned by root and not writable by others).
+- **Before updates:** `update.sh` also writes a database dump to `/opt/domainnotice/backups/pre-update/` before every
+  update.
 
 {: .important }
 If `data/keys/agent-link.pfx` is lost and there is no backup, every agent must be reinstalled with the new fingerprint.

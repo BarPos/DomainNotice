@@ -31,6 +31,14 @@ New-ADUser svc-domainnotice -AccountPassword (Read-Host -AsSecureString) -Enable
 Create `DomainNotice Admins` (full access) and optionally `DomainNotice Viewers` (read-only). Nested groups count,
 so you can add an existing group such as `IT Admins` as a member.
 
+Configure them by **DN** (`"CN=DomainNotice Admins,OU=Groups,DC=example,DC=local"`) where you can. A name is
+used only when exactly one group under `BaseDn` has it as its sAMAccountName or cn; when someone creates a second
+group with that name (for example in an OU where they have delegated rights), the name grants nothing until you fix
+it, and the server logs a warning. Keep the groups under `BaseDn`: the session re-check uses the synced copy.
+
+Only **one domain** is supported: the domain of `BaseDn` (its DC components). Console sign-in accepts only accounts
+of that domain, and only its users get group and OU targeting.
+
 ## 3. LDAPS certificate
 
 Domain controllers need a certificate for LDAPS, usually from AD CS. Give the server either:
@@ -38,7 +46,8 @@ Domain controllers need a certificate for LDAPS, usually from AD CS. Give the se
 - nothing, if the CA is in the Ubuntu trust store (`/usr/local/share/ca-certificates/` + `update-ca-certificates`).
 
 `AcceptInvalidCertificate` is refused outside development. With `"Security": "StartTls"` the server uses port 389
-and upgrades the connection to TLS.
+and upgrades the connection to TLS. An unknown `Security` value (a typo such as `3`) is not refused, but means plain
+LDAP without TLS; the server logs a warning at start and on the first connection.
 
 ## 4. Configure the server
 
@@ -71,10 +80,28 @@ the bind, and **Sync now** starts a sync.
 | Incremental | Every `IncrementalSyncMinutes`, objects with `uSNChanged` above the last value seen on that DC. Switching to another DC triggers a full sync. |
 | Paging | 500 entries per page; large groups' `member` ranges are followed |
 | Failover | `Hosts` are tried in order on connection errors (never on a wrong password) |
+| NetBIOS name | Each sync reads the domain's NetBIOS name (e.g. `CORP`) from its crossRef object under `CN=Partitions` of the configuration naming context, and stores it. |
 
 Known limits:
 - primary-group membership (`primaryGroupID`, e.g. *Domain Users*) is not synced;
 - deletions and moves out of `BaseDn` are seen at the next full sync.
+
+### Users reported by agents
+
+Agents report users as `DOMAIN\user`. Only names whose `DOMAIN` is the stored NetBIOS name (any case), or whose UPN
+matches, are matched to synced users and get their groups and OU. A local Windows account (`PC01\ceo`), an account of
+another domain, or a name without a domain only matches **User** targets typed by name. Until the first sync has
+stored the NetBIOS name, no reported user gets directory groups or OUs (the server logs a warning).
+
+### Console sign-in and sessions
+
+Domain sign-in binds as the user, asks the DC "Who am I?" and requires `<NetBIOS name>\user` in the answer; the user
+is then looked up under `BaseDn` from that answer. Open Console sessions of domain users are re-checked against the
+synced tables. A user who is disabled, removed from the admin and viewer groups or moved to the other role is signed
+out after the next sync (run **Sync now** to make it immediate); a deleted user object is seen at the next full sync.
+Until a sync has succeeded at all, sessions are only limited by their lifetime. Keep the groups and every nested
+group on the membership path under `BaseDn`: membership through a group outside it passes the sign-in but not the
+re-check, so the user would be signed out after each sync.
 
 ## Computer identity: Kerberos proof (optional)
 
@@ -87,7 +114,8 @@ setspn -S DomainNotice/notice.example.local svc-domainnotice
 Set-ADUser svc-domainnotice -Replace @{ 'msDS-SupportedEncryptionTypes' = 24 }
 ```
 
-Set `Directory:KerberosServicePrincipal` to the same SPN. PCs need to reach a DC for the ticket, and clocks must be
+Set `Directory:KerberosServicePrincipal` to the same SPN. It must have the form `DomainNotice/<host>`: agents refuse to
+get a ticket for any other service class. PCs need to reach a DC for the ticket, and clocks must be
 within 5 minutes. The server checks the ticket **offline**, with keys derived from the bind account's password; it does
 not contact a DC for this. The ticket is bound to the TLS connection, so it cannot be replayed.
 

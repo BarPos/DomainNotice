@@ -43,6 +43,7 @@ public class DirectorySyncTests(PostgresFixture pg)
         Assert.Equal("tester", run.RequestedBy);
         Assert.NotNull(run.FinishedAtUtc);
         Assert.Equal(t.Src.HighestUsn.ToString(), await ctx.Settings.GetAsync(SettingKeys.DirectoryHighestUsnPrefix + "dc1.example.local", Ct));
+        Assert.Equal("EXAMPLE", await ctx.Settings.GetAsync(SettingKeys.DirectoryNetBiosName, Ct));
 
         await using var db = ctx.Db.CreateContext();
         var all = await db.DirectoryObjects.ToDictionaryAsync(o => o.ObjectGuid, Ct);
@@ -138,6 +139,26 @@ public class DirectorySyncTests(PostgresFixture pg)
         Assert.Equal("OU=Computers,OU=People,DC=example,DC=local", all[t.Pcs.ObjectGuid].DistinguishedName);
         Assert.Equal(t.Staff.ObjectGuid, all[t.Pcs.ObjectGuid].ParentGuid);
         Assert.All(all.Values, o => Assert.False(o.Deleted));
+    }
+
+    [Fact]
+    public async Task Ou_rename_does_not_rewrite_names_that_only_contain_an_escaped_comma()
+    {
+        var ctx = await DirectoryTestContext.CreateAsync(pg);
+        var t = Build();
+        // A user in the domain root whose CN is "Mallory,OU=Staff": its DN ends with ",OU=Staff,DC=…" textually,
+        // but that comma is escaped, so it is not below OU=Staff.
+        var mallory = t.Src.AddUser(@"Mallory\,OU=Staff", FakeLdapSource.BaseDn);
+        var engine = ctx.Engine(t.Src);
+        Assert.True((await engine.RunAsync(DirectorySyncKind.Full, null, Ct)).Success);
+
+        t.Src.Update(t.Staff.ObjectGuid, e => FakeLdapSource.Copy(e, dn: "OU=People,DC=example,DC=local", cn: "People"));
+        Assert.True((await engine.RunAsync(DirectorySyncKind.Incremental, null, Ct)).Success);
+
+        await using var db = ctx.Db.CreateContext();
+        var all = await db.DirectoryObjects.ToDictionaryAsync(o => o.ObjectGuid, Ct);
+        Assert.Equal(@"CN=Mallory\,OU=Staff,DC=example,DC=local", all[mallory.ObjectGuid].DistinguishedName);
+        Assert.Equal("CN=Alice,OU=People,DC=example,DC=local", all[t.Alice.ObjectGuid].DistinguishedName);
     }
 
     [Fact]

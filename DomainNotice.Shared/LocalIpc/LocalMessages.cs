@@ -22,9 +22,47 @@ public static class LocalPipe
     /// <summary>Largest frame body on the pipe. An announcement must fit in one agent-link frame anyway.</summary>
     public const int MaxFrameBytes = 4 * 1024 * 1024;
 
-    /// <summary>Pipe name for one Windows session: <c>DomainNotice.Agent.Session.&lt;sessionId&gt;</c>.</summary>
-    public static string NameFor(int sessionId) =>
-        NamePrefix + sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    /// <summary>
+    /// Command-line switch that hands the Session UI its pipe suffix: <c>--pipe &lt;32 hex&gt;</c>. The service picks a
+    /// new random suffix for every session at every start, so another local account cannot create the pipe name before the service
+    /// does (squatting). A Session UI started without a valid suffix exits; the service starts it.
+    /// </summary>
+    public const string SuffixArgument = "--pipe";
+
+    /// <summary>Length of the suffix: 128 random bits as lowercase hex.</summary>
+    public const int SuffixLength = 32;
+
+    /// <summary>A new random pipe suffix (128 bits from the system CSPRNG).</summary>
+    public static string NewSuffix() =>
+        Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(SuffixLength / 2));
+
+    public static bool IsValidSuffix(string? suffix) =>
+        suffix is { Length: SuffixLength } && suffix.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
+
+    /// <summary>The suffix given with <c>--pipe &lt;suffix&gt;</c> (or <c>--pipe=&lt;suffix&gt;</c>), or null when it is missing or malformed.</summary>
+    public static string? SuffixFromArgs(IReadOnlyList<string> args)
+    {
+        for (var i = 0; i < args.Count; i++)
+        {
+            var arg = args[i];
+            string? value = null;
+            if (arg.Equals(SuffixArgument, StringComparison.OrdinalIgnoreCase))
+                value = i + 1 < args.Count ? args[i + 1] : null;
+            else if (arg.StartsWith(SuffixArgument + "=", StringComparison.OrdinalIgnoreCase))
+                value = arg[(SuffixArgument.Length + 1)..];
+            else
+                continue;
+            return IsValidSuffix(value) ? value : null;
+        }
+        return null;
+    }
+
+    /// <summary>Pipe name for one Windows session: <c>DomainNotice.Agent.Session.&lt;sessionId&gt;.&lt;suffix&gt;</c>.</summary>
+    public static string NameFor(int sessionId, string suffix)
+    {
+        if (!IsValidSuffix(suffix)) throw new ArgumentException("The pipe suffix must be 32 lowercase hex characters.", nameof(suffix));
+        return NamePrefix + sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) + "." + suffix;
+    }
 
     /// <summary>Single-instance mutex of the Session UI (per logon session).</summary>
     public const string SessionMutexName = @"Local\DomainNotice.Agent.Session";

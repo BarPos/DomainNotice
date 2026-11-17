@@ -71,51 +71,62 @@ public class AgentPackageCacheTests(PostgresFixture pg)
     }
 
     [Fact]
-    public async Task Import_validates_msi_and_audits()
+    public async Task Ensure_rejects_release_asset_that_is_not_an_msi_or_too_large()
     {
         await using var kit = await UpdatesKit.CreateAsync(pg);
-
-        var wrongExt = await kit.Cache.ImportAsync(new MemoryStream(UpdatesKit.FakeMsi(1000)), "agent.exe", "alice", Ct);
-        Assert.False(wrongExt.Ok);
-
         var notMsi = new byte[1000];
         new Random(3).NextBytes(notMsi);
         notMsi[0] = (byte)'M';
         notMsi[1] = (byte)'Z';
-        var bad = await kit.Cache.ImportAsync(new MemoryStream(notMsi), "agent.msi", "alice", Ct);
+        kit.Releases.Tagged.Add(kit.Releases.MakeRelease(AppVersion.Current, [(ReleaseAssetNames.AgentMsi(AppVersion.Current), notMsi)]));
+
+        var bad = await kit.Cache.EnsureCurrentAsync(Ct);
         Assert.False(bad.Ok);
         Assert.Contains("not an MSI", bad.Error);
+        Assert.Null(await kit.Cache.GetCurrentAsync(Ct));
+        Assert.Empty(System.IO.Directory.GetFiles(Path.Combine(kit.Paths.AgentPackagesDirectory, AppVersion.Current)));
 
-        var tiny = await kit.Cache.ImportAsync(new MemoryStream([0xD0, 0xCF]), "agent.msi", "alice", Ct);
-        Assert.False(tiny.Ok);
-
+        kit.Releases.Tagged.Clear();
+        kit.Releases.Tagged.Add(kit.Releases.MakeRelease(AppVersion.Current, [(ReleaseAssetNames.AgentMsi(AppVersion.Current), UpdatesKit.FakeMsi(10_000))]));
         kit.Cache.MaxBytes = 4096;
-        var large = await kit.Cache.ImportAsync(new NonSeekableStream(UpdatesKit.FakeMsi(10_000)), "agent.msi", "alice", Ct);
+        var large = await kit.Cache.EnsureCurrentAsync(Ct);
         Assert.False(large.Ok);
         Assert.Contains("larger", large.Error);
         Assert.Null(await kit.Cache.GetCurrentAsync(Ct));
         Assert.Empty(System.IO.Directory.GetFiles(Path.Combine(kit.Paths.AgentPackagesDirectory, AppVersion.Current)));
+    }
 
-        kit.Cache.MaxBytes = AgentPackageCache.MaxMsiBytes;
+    [Fact]
+    public async Task Test_seeding_uses_the_download_checks()
+    {
+        await using var kit = await UpdatesKit.CreateAsync(pg);
         var msi = UpdatesKit.FakeMsi(10_000);
-        var ok = await kit.Cache.ImportAsync(new NonSeekableStream(msi), "../../etc/DomainNotice.Agent.MSI", "alice", Ct);
+
+        var wrongSha = await kit.Cache.StoreVerifiedAsync(new NonSeekableStream(msi), new string('0', 64), "test", Ct);
+        Assert.False(wrongSha.Ok);
+        Assert.Contains("SHA-256 mismatch", wrongSha.Error);
+        Assert.Null(await kit.Cache.GetCurrentAsync(Ct));
+
+        var ok = await kit.Cache.StoreVerifiedAsync(new NonSeekableStream(msi), Convert.ToHexStringLower(SHA256.HashData(msi)), "test", Ct);
         Assert.True(ok.Ok, ok.Error);
         var current = await kit.Cache.GetCurrentAsync(Ct);
         Assert.NotNull(current);
-        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(msi)), current.Sha256);
-        Assert.Equal(AgentPackageCache.SourceImport, current.Source);
-        Assert.StartsWith(kit.Paths.AgentPackagesDirectory, current.FilePath); // the file name never becomes a path
-        await using (var s = kit.Cache.OpenRead(current))
-        {
-            using var ms = new MemoryStream();
-            await s.CopyToAsync(ms, Ct);
-            Assert.Equal(msi, ms.ToArray());
-        }
+        Assert.StartsWith(kit.Paths.AgentPackagesDirectory, current.FilePath);
+        await using var s = kit.Cache.OpenRead(current);
+        using var ms = new MemoryStream();
+        await s.CopyToAsync(ms, Ct);
+        Assert.Equal(msi, ms.ToArray());
+    }
 
-        await using var db = kit.Db.CreateContext();
-        var entry = await db.AuditLog.SingleAsync(a => a.Action == AuditActions.AgentPackageImported, Ct);
-        Assert.Equal("alice", entry.Actor);
-        Assert.Contains(current.Sha256, entry.Details);
+    [Fact]
+    public void Package_cache_has_no_import_or_upload_entry_point()
+    {
+        // 1.0.5: the MSI only comes from the release download; the Console cannot put a file into the cache.
+        Assert.DoesNotContain(typeof(IAgentPackageCache).GetMethods(),
+            m => m.Name.Contains("Import", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("Upload", StringComparison.OrdinalIgnoreCase)
+                 || m.GetParameters().Any(p => p.ParameterType == typeof(Stream)));
+        Assert.DoesNotContain(typeof(AgentPackageCache).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance),
+            m => m.GetParameters().Any(p => p.ParameterType == typeof(Stream)));
     }
 
     private sealed class NonSeekableStream(byte[] data) : MemoryStream(data)

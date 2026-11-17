@@ -107,10 +107,18 @@ public class AnonymousAnswersListTests(PostgresFixture pg)
             Assert.Equal("Named choice", row.Option);
             Assert.Equal(@"CORP\bob", row.UserName);
 
-            var csv = System.Text.Encoding.UTF8.GetString(await ConsoleLists.AnonymousAnswers.ExportCsvAsync(gctx, new GridQuery(), Ct));
+            var csv = System.Text.Encoding.UTF8.GetString(await ConsoleLists.AnonymousAnswers.ExportCsvAsync(gctx, new GridQuery(), CsvStyle.Default, Ct));
             Assert.StartsWith("﻿Announcement,Question,Option\r\n", csv);
             Assert.DoesNotContain("bob", csv);
             Assert.DoesNotContain("Named choice", csv);
+
+            // The header is translated before writing (not re-split afterwards) and the style's separator is used throughout.
+            var styled = System.Text.Encoding.UTF8.GetString(await ConsoleLists.AnonymousAnswers.ExportCsvAsync(gctx, new GridQuery(),
+                new CsvStyle(';', label => label == "Option" ? "Opcja; wybrana" : label.ToUpperInvariant()), Ct));
+            var lines = styled.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal("﻿ANNOUNCEMENT;QUESTION;\"Opcja; wybrana\"", lines[0]);
+            Assert.Equal(4, lines.Length);
+            Assert.All(lines[1..], l => Assert.StartsWith("Survey;", l));
         }
     }
 

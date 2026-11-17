@@ -12,6 +12,32 @@ public sealed record InstallMarker(Guid TaskId, string Version, string LogPath, 
 {
     public const string FileName = "install-pending.txt";
 
+    /// <summary>The MSI log of a task: <c>&lt;updates&gt;\&lt;taskId&gt;.log</c>.</summary>
+    public static string LogPathFor(string updatesDirectory, Guid taskId) =>
+        Path.Combine(updatesDirectory, taskId.ToString("D") + ".log");
+
+    /// <summary>
+    /// <see cref="LogPath"/> when it is exactly this task's log in the updates folder and not a link; otherwise null.
+    /// The marker is a file on disk: whatever else it names is never read (its end would be sent to the server).
+    /// </summary>
+    public string? SafeLogPath(string updatesDirectory)
+    {
+        string expected, actual;
+        try
+        {
+            expected = Path.GetFullPath(LogPathFor(updatesDirectory, TaskId));
+            actual = Path.GetFullPath(LogPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+
+        if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase)) return null;
+        if (FolderGuard.CheckDirectories(updatesDirectory) is not null || FolderGuard.IsLink(actual)) return null;
+        return actual;
+    }
+
     public void Write(string path)
     {
         var text = string.Join('\n',
@@ -28,7 +54,7 @@ public sealed record InstallMarker(Guid TaskId, string Version, string LogPath, 
     {
         try
         {
-            if (!File.Exists(path)) return null;
+            if (!File.Exists(path) || FolderGuard.IsLink(path)) return null;
             var lines = File.ReadAllText(path, Encoding.UTF8).Split('\n');
             if (lines.Length < 4) return null;
             if (!Guid.TryParse(lines[0].Trim(), out var taskId)) return null;

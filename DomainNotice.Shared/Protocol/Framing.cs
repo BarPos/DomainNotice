@@ -49,7 +49,15 @@ public static class Framing
 
     /// <summary>Reads one frame. Returns null on a clean end of stream before a header.</summary>
     /// <exception cref="ProtocolException">Oversized frame, unknown kind, or truncated frame.</exception>
-    public static async ValueTask<Frame?> ReadAsync(Stream stream, int maxBodyBytes, CancellationToken ct)
+    public static ValueTask<Frame?> ReadAsync(Stream stream, int maxBodyBytes, CancellationToken ct) =>
+        ReadAsync(stream, maxBodyBytes, int.MaxValue, ct);
+
+    /// <summary>
+    /// Reads one frame, allocating at most <paramref name="initialBodyBytes"/> before the body arrives. Larger bodies
+    /// grow as their bytes arrive, so a header that announces a large body costs memory only for the bytes the peer
+    /// really sends. Use it for untrusted peers; <see cref="int.MaxValue"/> allocates the announced length at once.
+    /// </summary>
+    public static async ValueTask<Frame?> ReadAsync(Stream stream, int maxBodyBytes, int initialBodyBytes, CancellationToken ct)
     {
         var header = new byte[HeaderSize];
         var read = await ReadAtLeastAsync(stream, header, ct).ConfigureAwait(false);
@@ -61,10 +69,29 @@ public static class Framing
         var kind = (FrameKind)header[4];
         if (kind is not (FrameKind.Json or FrameKind.Chunk)) throw new ProtocolException($"Unknown frame kind {header[4]}.");
 
-        var body = new byte[length];
-        if (length > 0 && await ReadAtLeastAsync(stream, body, ct).ConfigureAwait(false) < length)
-            throw new ProtocolException("Truncated frame body.");
+        var body = await ReadBodyAsync(stream, (int)length, Math.Max(1, initialBodyBytes), ct).ConfigureAwait(false);
         return new Frame(kind, body);
+    }
+
+    /// <summary>The first allocation the server uses for bodies from agents (see <see cref="FrameConnection.InitialBodyBytes"/>).</summary>
+    public const int InitialBodyBuffer = 64 * 1024;
+
+    private static async ValueTask<ReadOnlyMemory<byte>> ReadBodyAsync(Stream stream, int length, int initial, CancellationToken ct)
+    {
+        if (length == 0) return ReadOnlyMemory<byte>.Empty;
+        var buffer = new byte[Math.Min(length, initial)];
+        var total = 0;
+        while (true)
+        {
+            var n = await ReadAtLeastAsync(stream, buffer.AsMemory(total), ct).ConfigureAwait(false);
+            total += n;
+            if (total == length) return buffer;
+            if (total < buffer.Length) throw new ProtocolException("Truncated frame body.");
+            // The buffer is full and more is announced: grow (double, capped at the announced length).
+            var next = new byte[(int)Math.Min(length, (long)buffer.Length * 2)];
+            buffer.AsSpan(0, total).CopyTo(next);
+            buffer = next;
+        }
     }
 
     public static byte[] BuildJson(ReadOnlySpan<byte> envelopeUtf8)

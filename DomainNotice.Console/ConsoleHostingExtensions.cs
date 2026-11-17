@@ -51,6 +51,8 @@ public static class ConsoleHostingExtensions
                 o.Cookie.SecurePolicy = cookieSecurity;
                 o.Cookie.SameSite = SameSiteMode.Strict;
                 o.Cookie.IsEssential = true;
+                // 8 hours without activity ends the cookie; Console:SessionMaxHours (default 12) after sign-in ends the
+                // session even while in use, and account changes end it earlier (ConsoleAuth.ValidatePrincipalAsync).
                 o.SlidingExpiration = true;
                 o.ExpireTimeSpan = TimeSpan.FromHours(8);
                 o.LoginPath = ConsoleAuth.LoginPath;

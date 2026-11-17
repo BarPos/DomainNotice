@@ -61,4 +61,28 @@ public class RetentionTests(PostgresFixture pg)
             new AgentLinkTimings(), TimeProvider.System, NullLogger<HistoryRetention>.Instance);
         Assert.Equal((0, 0, 0), await job.PruneAsync(Ct));
     }
+
+    [Fact]
+    public async Task Old_failed_sign_ins_are_pruned_and_other_audit_entries_kept()
+    {
+        var db = await pg.CreateDatabaseAsync();
+        var now = DateTime.UtcNow;
+        await using (var ctx = db.CreateContext())
+        {
+            ctx.AuditLog.AddRange(
+                new AuditLogEntry { AtUtc = now.AddDays(-91), Actor = "x", Action = Abstractions.AuditActions.SignInFailed },
+                new AuditLogEntry { AtUtc = now.AddDays(-89), Actor = "y", Action = Abstractions.AuditActions.SignInFailed },
+                new AuditLogEntry { AtUtc = now.AddDays(-400), Actor = "z", Action = Abstractions.AuditActions.SignIn });
+            await ctx.SaveChangesAsync(Ct);
+        }
+        var job = new HistoryRetention(db, Microsoft.Extensions.Options.Options.Create(new HistoryOptions()),
+            new AgentLinkTimings(), TimeProvider.System, NullLogger<HistoryRetention>.Instance);
+        Assert.Equal(1, await job.PruneFailedSignInsAsync(Ct));
+        await using var check = db.CreateContext();
+        Assert.Equal(["y", "z"], (await check.AuditLog.Select(a => a.Actor).ToListAsync(Ct)).Order());
+
+        var keepAll = new HistoryRetention(db, Microsoft.Extensions.Options.Options.Create(new HistoryOptions { FailedSignInRetentionDays = 0 }),
+            new AgentLinkTimings(), TimeProvider.System, NullLogger<HistoryRetention>.Instance);
+        Assert.Equal(0, await keepAll.PruneFailedSignInsAsync(Ct));
+    }
 }

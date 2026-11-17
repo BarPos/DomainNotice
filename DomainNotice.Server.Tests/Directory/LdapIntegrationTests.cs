@@ -103,6 +103,10 @@ public class LdapIntegrationTests(PostgresFixture pg)
         var run = await ctx.Engine(new LdapDirectorySource(connector, MsOptions.Create(o))).RunAsync(Data.Entities.DirectorySyncKind.Full, "it", Ct);
         Assert.True(run.Success, run.Error);
         Assert.True(run.ObjectsChanged > 0);
+        // The crossRef lookup found the domain's NetBIOS name.
+        var netBios = await ctx.Settings.GetAsync(SettingKeys.DirectoryNetBiosName, Ct);
+        Assert.False(string.IsNullOrWhiteSpace(netBios));
+        if (Env("NETBIOS") is { } expectedNetBios) Assert.Equal(expectedNetBios, netBios, ignoreCase: true);
 
         if (Env("SIGNIN_USER") is { } user && Env("SIGNIN_PASSWORD") is { } password)
         {
@@ -110,6 +114,26 @@ public class LdapIntegrationTests(PostgresFixture pg)
             var result = await auth.AuthenticateAsync(user, password, Ct);
             Assert.Equal(DomainAuthStatus.Success, result.Status);
             Assert.Equal(ConsoleRoles.Admin, result.Role);
+            Assert.NotNull(result.ObjectGuid);
+            Assert.StartsWith(netBios + @"\", result.UserName, StringComparison.OrdinalIgnoreCase);
+
+            var prefixed = await auth.AuthenticateAsync($@"{netBios}\{BindNames.SamAccountName(user)}", password, Ct);
+            Assert.Equal(DomainAuthStatus.Success, prefixed.Status);
+            // Another domain's prefix fails closed even with the right password (the bind may still succeed).
+            var other = await auth.AuthenticateAsync($@"NOTTHISDOMAIN\{BindNames.SamAccountName(user)}", password, Ct);
+            Assert.NotEqual(DomainAuthStatus.Success, other.Status);
+            if (Env("SIGNIN_DN") is { } dn)
+                Assert.Equal(DomainAuthStatus.InvalidCredentials, (await auth.AuthenticateAsync(dn, password, Ct)).Status);
+
+            // The session re-check finds the same user and role in the synced tables (after a sync newer than the sign-in).
+            var session = new ConsoleSession(result.UserName!, SignInSource.Domain, result.Role!, ctx.Time.GetUtcNow().UtcDateTime,
+                result.ObjectGuid, null);
+            ctx.Time.Advance(TimeSpan.FromMinutes(1));
+            Assert.True((await ctx.Engine(new LdapDirectorySource(connector, MsOptions.Create(o))).RunAsync(Data.Entities.DirectorySyncKind.Full, "it", Ct)).Success);
+            var validator = new Server.Accounts.ConsoleSessionValidator(ctx.Db, MsOptions.Create(new ConsoleOptions()), MsOptions.Create(o), ctx.Time,
+                NullLogger<Server.Accounts.ConsoleSessionValidator>.Instance);
+            Assert.True(await validator.IsValidAsync(session, Ct));
+            Assert.False(await validator.IsValidAsync(session with { Role = ConsoleRoles.Viewer }, Ct));
         }
     }
 }

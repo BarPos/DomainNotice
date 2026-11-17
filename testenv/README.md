@@ -41,8 +41,10 @@ The server is configured with LDAPS against the DC's CA, `AdminGroups=["DomainNo
    agent**. It contains `DomainNotice.Agent-1.0.0-x64.msi`, built with WiX on a Windows runner. You can also run
    `build\build-agent-msi.ps1` on a Windows machine with the .NET 10 SDK. Optionally upload the MSI in the Console
    under Settings → Agent install, so it can be downloaded from there.
-2. **Make the PC and your user known to the test domain**, so AD targets and the name-based AD link work. The PC is not
-   joined to `CORP.TEST`; the agent reports `PCNAME\youruser`, and user matching uses the part after the `\`.
+2. **Make the PC known to the test domain**, so computer targets and the name-based AD link work. The PC is not
+   joined to `CORP.TEST`, so the agent reports a local user `PCNAME\youruser`. Only `CORP\…` users get AD user, group
+   and OU targets, so target your user **by typed name** (`youruser`). The user and member lines below only help for
+   AD targets with a domain-joined PC.
    ```sh
    testenv/add-ad-object.sh computer <WINDOWS-PC-NAME>
    testenv/add-ad-object.sh user <your-windows-user-name>
@@ -54,8 +56,8 @@ The server is configured with LDAPS against the DC's CA, `AdminGroups=["DomainNo
    - `services.msc` shows *DomainNotice Agent*, running and Automatic;
    - the tray icon shows "Connected";
    - in the Console, the PC appears under Computers. Its AD link is *Matched by name* if you ran step 2.
-5. **Send an announcement** from the Console (Announcements → New). Target Everyone, your user, the `Sales Team` group,
-   the `Staff/Sales` OU or the PC.
+5. **Send an announcement** from the Console (Announcements → New). Target Everyone, your user (typed name) or the PC.
+   The `Sales Team` group and the `Staff/Sales` OU reach only `CORP\…` users, e.g. the probe's `CORP\alice`.
 
 Logs:
 - **Server:** `docker exec dn-server journalctl -u domainnotice -f`

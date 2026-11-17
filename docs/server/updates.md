@@ -54,24 +54,54 @@ Releases are not signed yet. `SHA256SUMS.txt` catches corrupted downloads, not a
 3. `update.sh` does the following:
    - accepts only a plain `x.y.z` that is newer than the running version, and checks the hash again;
    - unpacks safely: no absolute paths, no `..`, no links pointing outside, files owned by root;
-   - stops the server and writes a `pg_dump` backup to `backups/`;
+   - stops the server and writes a `pg_dump` backup to `backups/pre-update/` (root only);
    - runs `--migrate-only` with the new version, as `domainnotice`;
    - switches the `current` symlink and starts the server.
 4. **Rollback:** if `/healthz` does not answer within 2 minutes, it restores the backup, switches the symlink back
    and starts the old version.
 5. The result appears in the Console. The last 3 releases are kept.
 
-Downgrades are not offered. Updating `update.sh` and the systemd units themselves takes `install.sh --upgrade` or
-`--repair`.
+Downgrades are not offered.
+
+### Refreshing update.sh, backup.sh and the units
+
+`update.sh`, `backup.sh` and the systemd units run as root. A Console update (*Update now*) never replaces them:
+the new release's copies are in `current/deploy/linux/`, but the package was staged by the server process, so
+nothing in it is trusted as root. After a Console update, the root scripts and units stay at the version that
+`install.sh` last installed. They are refreshed only from a package you give `install.sh`:
+
+```sh
+# get the install.sh of that release (an install.sh from 1.0.4 or older would take the files from current/)
+curl -fsSLO https://github.com/BarPos/DomainNotice/releases/download/v1.2.0/install.sh
+# the release that is now running, downloaded from GitHub and checked against its SHA256SUMS.txt
+sudo bash install.sh --repair --version 1.2.0
+# or offline, from the tarball (checked against SHA256SUMS.txt when it is next to it)
+sudo bash install.sh --repair --package DomainNotice.Server-1.2.0-linux-x64.tar.gz
+```
+
+`install.sh --upgrade` refreshes them as well, from the package it installs. `install.sh --repair` without
+`--package`/`--version` keeps the installed copies (it stops if one is missing). Run `install.sh` from a download
+or a package you unpacked yourself, never from `/opt/domainnotice/current/` or `releases/`.
+
+{: .note }
+Run this once after updating to 1.0.5 or later through the Console. Until then the older `update.sh` and units stay
+in place, and `backups/` still belongs to the service user. `install.sh` (or the first backup or update made with
+the new scripts) makes it root-only.
 
 ## Agents: Update agent
 
 Use **Update agent** on one computer, on selected computers, or **Update all** on the Dashboard for every outdated
 agent. The target is always the server's own version.
 
-1. The server downloads the agent MSI for **its own version** (from the release tagged `v<version>`) once, verifies
-   it, and keeps it in `data/packages/agent/<version>/` (current and previous).
-   - Without GitHub, upload a locally built MSI in **Settings → Agent install**.
+1. The server downloads the agent MSI for **its own version** (from the release tagged `v<version>`) once, checks
+   it against that release's `SHA256SUMS.txt`, and keeps it in `data/packages/agent/<version>/` (current and
+   previous). This happens at start and on **Check now**.
+   - This download is the **only** way an MSI gets into the cache. Since 1.0.5 the Console has no MSI upload, so a
+     Console account cannot put its own package in front of every agent.
+   - **Servers without GitHub access** (`Updates:GitHubRepository` blank, or no outbound HTTPS): the cache stays
+     empty, and **Update agent** and automatic updates report that the package is missing. Offline import is not
+     available in 1.0.5. Install and update agents with the release's MSI yourself (GPO or a software distribution
+     tool, see [Agent deployment](../agent/index.md#mass-deployment)); `msiexec /i` over an older agent upgrades it.
 2. It creates an update task and sends `UpdateAgent` when the PC is online, or when it next connects.
 3. The agent downloads the MSI over the agent link in 256 KiB chunks, resuming after a dropped connection.
    Agents never contact GitHub.
@@ -89,6 +119,6 @@ are listed under **Agent updates**.
 - turning it on covers the agents online at that moment; the others are updated when they connect;
 - after a server update, outdated agents are updated the same way.
 
-The agent package for the server's version must be cached (downloaded from the release, or imported in Settings).
+The agent package for the server's version must be cached (downloaded from the release; see above).
 A computer whose automatic update failed is retried after 24 hours, so a broken install does not loop. The Console
 setting overrides `Agents:AutoUpdate` from the configuration file.

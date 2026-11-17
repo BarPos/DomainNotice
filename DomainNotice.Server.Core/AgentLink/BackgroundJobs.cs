@@ -116,7 +116,30 @@ internal sealed class HistoryRetention(
             {
                 logger.LogError(ex, "History retention failed");
             }
+            try
+            {
+                await PruneFailedSignInsAsync(stoppingToken);
+            }
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogError(ex, "Failed sign-in audit retention failed");
+            }
         } while (await OfflineSweeper.WaitAsync(timer, stoppingToken));
+    }
+
+    /// <summary>
+    /// Deletes failed sign-in audit rows older than History:FailedSignInRetentionDays (default 90; &lt;= 0 keeps
+    /// them), so password guessing cannot grow the audit log without limit. Every other audit entry is kept.
+    /// </summary>
+    public async Task<int> PruneFailedSignInsAsync(CancellationToken ct)
+    {
+        var days = options.Value.FailedSignInRetentionDays;
+        if (days <= 0) return 0;
+        var cutoff = time.GetUtcNow().UtcDateTime.AddDays(-days);
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var n = await db.AuditLog.Where(a => a.Action == Abstractions.AuditActions.SignInFailed && a.AtUtc < cutoff).ExecuteDeleteAsync(ct);
+        if (n > 0) logger.LogInformation("Audit retention ({Days} days): deleted {Count} failed sign-in rows", days, n);
+        return n;
     }
 
     public async Task<(int Names, int Logons, int Ips)> PruneAsync(CancellationToken ct)

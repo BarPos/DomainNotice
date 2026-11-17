@@ -1,3 +1,4 @@
+using DomainNotice.Server.Abstractions;
 using DomainNotice.Server.Data;
 using DomainNotice.Server.Data.Entities;
 using DomainNotice.Shared.Protocol;
@@ -17,10 +18,20 @@ internal sealed class AdLinkService(
     IDbContextFactory<AppDbContext> dbFactory,
     AgentObservers events,
     AgentHub hub,
+    IAuditLog audit,
+    AgentLinkTimings timings,
     TimeProvider time,
     ILogger<AdLinkService> logger)
 {
+    /// <summary>Audit actor for link decisions the server makes by itself.</summary>
+    internal const string SystemActor = "system (agent link)";
+
     private readonly SemaphoreSlim _gate = new(1, 1);
+    /// <summary>
+    /// (newcomer, holder) pairs whose Kerberos proof was held back (in memory). Audited once per pair (agents prove
+    /// again on every connect), and the name job leaves these waiting.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(Guid, Guid), byte> _proofHeld = new();
 
     private DateTime Now => time.GetUtcNow().UtcDateTime;
 
@@ -75,6 +86,14 @@ internal sealed class AdLinkService(
     {
         if (computer.IsRevoked || computer.IsReplaced) return false;
         if (computer.AdLinkState is AdLinkState.Proven or AdLinkState.KeptSeparate) return false;
+        // Waiting because this computer's own Kerberos proof was held back (see ApplyProofAsync): only an
+        // administrator, or the holder being revoked or deleted, ends the wait. Waits caused by the name alone are
+        // re-evaluated as before.
+        if (computer.AdLinkState == AdLinkState.AwaitingApproval && computer.ConflictsWithComputerId is { } holderId
+            && _proofHeld.ContainsKey((computer.Id, holderId))
+            && await db.Computers.AnyAsync(c => c.Id == holderId && c.AdLinkState == AdLinkState.Proven && c.RevokedAtUtc == null
+                                                && c.ReplacedByComputerId == null && c.DirectoryObjectGuid != null, ct))
+            return false;
 
         var sam = SamForName(computer.Name);
         if (computer.AdLinkState == AdLinkState.MatchedByName && computer.DirectoryObjectGuid is { } linkedGuid)
@@ -119,12 +138,18 @@ internal sealed class AdLinkService(
     /// <summary>
     /// A valid Kerberos proof for <paramref name="samLower"/> (e.g. "pc1$"): the computer is linked Proven, every
     /// other record linked to that AD object is marked replaced by it and disconnected (plan 3.4 step 4).
+    /// <para>Exception: when another non-revoked record already holds a <b>Proven</b> link to that AD object and is
+    /// online or was seen within <see cref="AgentLinkTimings.ProofTakeoverQuietPeriod"/>, the link does not move: any
+    /// code running as the machine account on that PC could otherwise enrol a second key and take the computer over.
+    /// The newcomer is put on Awaiting approval instead (audited once), and an administrator decides there.</para>
     /// </summary>
     public async Task<(bool Linked, DirectoryObject? Object, string? Error)> ApplyProofAsync(Guid computerId, string samLower, CancellationToken ct)
     {
         var replaced = new List<Guid>();
         var repointed = new List<Guid>();
         DirectoryObject? obj;
+        Guid? heldBy = null;
+        var newlyHeld = false;
         await _gate.WaitAsync(ct);
         try
         {
@@ -141,32 +166,42 @@ internal sealed class AdLinkService(
             if (computer is null || computer.IsRevoked || computer.IsReplaced) return (false, null, "This computer can no longer be linked.");
 
             var now = Now;
-            computer.AdLinkState = AdLinkState.Proven;
-            computer.DirectoryObjectGuid = obj.ObjectGuid;
-            computer.AdLinkedAtUtc = now;
-            computer.ConflictsWithComputerId = null;
-
-            var olds = await db.Computers
-                .Where(c => c.Id != computerId && c.DirectoryObjectGuid == obj.ObjectGuid && c.ReplacedByComputerId == null)
-                .ToListAsync(ct);
-            foreach (var old in olds) MarkReplaced(old, computerId, now);
-            replaced.AddRange(olds.Select(o => o.Id));
-
-            // Newcomers waiting on a record that was just replaced now wait on this one.
-            var waiting = await db.Computers
-                .Where(c => c.Id != computerId && c.AdLinkState == AdLinkState.AwaitingApproval && c.ConflictsWithComputerId != null
-                            && replaced.Contains(c.ConflictsWithComputerId.Value))
-                .ToListAsync(ct);
-            foreach (var w in waiting) w.ConflictsWithComputerId = computerId;
-            repointed.AddRange(waiting.Select(w => w.Id));
-
-            await db.SaveChangesAsync(ct);
-            logger.LogInformation("Computer {Computer} proved AD account {Sam} ({Dn}); replaced: {Replaced}",
-                computerId, samLower, obj.DistinguishedName, replaced.Count == 0 ? "none" : string.Join(", ", replaced));
+            var recent = now - timings.ProofTakeoverQuietPeriod;
+            var provenHolders = await db.Computers.AsNoTracking()
+                .Where(c => c.Id != computerId && c.DirectoryObjectGuid == obj.ObjectGuid && c.ReplacedByComputerId == null
+                            && c.RevokedAtUtc == null && c.AdLinkState == AdLinkState.Proven)
+                .Select(c => new { c.Id, c.LastSeenAtUtc }).ToListAsync(ct);
+            if (provenHolders.FirstOrDefault(h => hub.IsOnline(h.Id) || h.LastSeenAtUtc >= recent) is { } holder)
+            {
+                heldBy = holder.Id;
+                if (computer.AdLinkState == AdLinkState.KeptSeparate)
+                    return (false, obj, "An administrator chose to keep this computer separate from the AD computer it proved.");
+                newlyHeld = computer.AdLinkState != AdLinkState.AwaitingApproval || computer.ConflictsWithComputerId != holder.Id;
+                computer.AdLinkState = AdLinkState.AwaitingApproval;
+                computer.ConflictsWithComputerId = holder.Id;
+                computer.DirectoryObjectGuid = null;
+                computer.AdLinkedAtUtc = null;
+                await db.SaveChangesAsync(ct);
+                if (newlyHeld || !_proofHeld.ContainsKey((computerId, holder.Id)))
+                    logger.LogWarning("Computer {Computer} proved AD account {Sam} ({Dn}), but computer {Holder} holds a Kerberos-proven link " +
+                                      "to it and was online recently; the link stays, the newcomer awaits approval", computerId, samLower,
+                        obj.DistinguishedName, holder.Id);
+            }
+            else await LinkProvenAsync(db, computer, obj, now, replaced, repointed, ct);
         }
         finally
         {
             _gate.Release();
+        }
+
+        if (heldBy is { } heldById)
+        {
+            if (_proofHeld.TryAdd((computerId, heldById), 0))
+                await audit.WriteAsync(SystemActor, AuditActions.ComputerProofAwaitingApproval, "Computer", computerId.ToString(),
+                    $"proved {samLower}; computer {heldById} keeps the link until an administrator decides", ct);
+            if (newlyHeld) await events.RaiseComputerIdentityChangedAsync(computerId, ct);
+            return (false, obj, "Another installation holds this AD computer's link and was online recently. An administrator must " +
+                                "approve the replacement in the Console (Computers, Awaiting approval).");
         }
 
         foreach (var id in replaced)
@@ -175,6 +210,35 @@ internal sealed class AdLinkService(
         foreach (var id in replaced.Concat(repointed))
             await events.RaiseComputerIdentityChangedAsync(id, ct);
         return (true, obj, null);
+    }
+
+    /// <summary>Links Proven and marks every other record linked to the AD object replaced (caller holds the gate).</summary>
+    private async Task LinkProvenAsync(AppDbContext db, Computer computer, DirectoryObject obj, DateTime now, List<Guid> replaced,
+        List<Guid> repointed, CancellationToken ct)
+    {
+        var computerId = computer.Id;
+        computer.AdLinkState = AdLinkState.Proven;
+        computer.DirectoryObjectGuid = obj.ObjectGuid;
+        computer.AdLinkedAtUtc = now;
+        computer.ConflictsWithComputerId = null;
+
+        var olds = await db.Computers
+            .Where(c => c.Id != computerId && c.DirectoryObjectGuid == obj.ObjectGuid && c.ReplacedByComputerId == null)
+            .ToListAsync(ct);
+        foreach (var old in olds) MarkReplaced(old, computerId, now);
+        replaced.AddRange(olds.Select(o => o.Id));
+
+        // Newcomers waiting on a record that was just replaced now wait on this one.
+        var waiting = await db.Computers
+            .Where(c => c.Id != computerId && c.AdLinkState == AdLinkState.AwaitingApproval && c.ConflictsWithComputerId != null
+                        && replaced.Contains(c.ConflictsWithComputerId.Value))
+            .ToListAsync(ct);
+        foreach (var w in waiting) w.ConflictsWithComputerId = computerId;
+        repointed.AddRange(waiting.Select(w => w.Id));
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Computer {Computer} proved AD account {Sam} ({Dn}); replaced: {Replaced}",
+            computerId, obj.SamAccountNameLower, obj.DistinguishedName, replaced.Count == 0 ? "none" : string.Join(", ", replaced));
     }
 
     private static void MarkReplaced(Computer old, Guid byId, DateTime now)

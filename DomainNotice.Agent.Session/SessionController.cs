@@ -10,7 +10,7 @@ namespace DomainNotice.Agent.Session;
 internal sealed class SessionController : IDisposable
 {
     private readonly Dispatcher _ui;
-    private readonly ServicePipeClient _pipe = new();
+    private readonly ServicePipeClient _pipe;
     private readonly CancellationTokenSource _cts = new();
     private readonly List<ShowAnnouncement> _queue = [];
     private TrayHost? _tray;
@@ -18,7 +18,11 @@ internal sealed class SessionController : IDisposable
     private ConnectionStatus? _status;
     private volatile bool _pipeConnected;
 
-    public SessionController(Dispatcher ui) => _ui = ui;
+    public SessionController(Dispatcher ui, string pipeSuffix)
+    {
+        _ui = ui;
+        _pipe = new ServicePipeClient(pipeSuffix);
+    }
 
     public void Start()
     {

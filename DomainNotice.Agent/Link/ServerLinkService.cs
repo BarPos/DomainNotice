@@ -403,7 +403,15 @@ public sealed class ServerLinkService : BackgroundService, IServerSender
         var keepalive = new KeepaliveMonitor(_time, ProtocolInfo.OfflineAfter);
 
         if (!string.IsNullOrWhiteSpace(welcome.KerberosServicePrincipal))
-            _ = Task.Run(() => ProveIdentityAsync(connection, ssl, welcome.KerberosServicePrincipal!, linkCts.Token), CancellationToken.None);
+        {
+            // The ticket is issued to the computer account: only ever for DomainNotice/<host>, never for another
+            // service class a server might name (it could relay such a ticket to that service).
+            if (KerberosSpnPolicy.Accept(welcome.KerberosServicePrincipal) is { } spn)
+                _ = Task.Run(() => ProveIdentityAsync(connection, ssl, spn, linkCts.Token), CancellationToken.None);
+            else
+                _logger.LogWarning("No Kerberos proof sent: the server asked for a ticket to '{Spn}', but only {ServiceClass}/<host> service principals are accepted.",
+                    KerberosSpnPolicy.ForLog(welcome.KerberosServicePrincipal), KerberosSpnPolicy.ServiceClass);
+        }
 
         var work = Channel.CreateUnbounded<IncomingFrame>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
         var tasks = new[]

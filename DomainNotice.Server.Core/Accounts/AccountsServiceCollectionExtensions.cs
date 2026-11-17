@@ -15,6 +15,7 @@ public static class AccountsServiceCollectionExtensions
         services.TryAddSingleton<SignInRateLimiter>();
         services.TryAddSingleton<ILocalAccountService, LocalAccountService>();
         services.TryAddSingleton<IAdminSignInService, AdminSignInService>();
+        services.TryAddSingleton<IConsoleSessionValidator, ConsoleSessionValidator>();
         return services;
     }
 }

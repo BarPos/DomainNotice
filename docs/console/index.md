@@ -19,15 +19,23 @@ The Console is the web management panel at `https://<server>/`:
 
 The sign-in page offers **Domain account** and **Local account**.
 
-- **Domain account:** `user`, `DOMAIN\user` or `user@domain`. The server binds to AD **as you**, then checks
+- **Domain account:** `user`, `DOMAIN\user` or `user@domain` (not a DN). Only accounts of the domain of
+  `Directory:BaseDn` can sign in; `DOMAIN` must be its NetBIOS name. The server binds to AD **as you**, then checks
   membership, nested groups included:
   - `Directory:AdminGroups` gives **Admin**, with full access;
   - `Directory:ViewerGroups` gives **Viewer**, read-only: every change is hidden and also refused by the server.
 - **Local account:** backup accounts stored in the database (PBKDF2). They have full admin rights and keep working when
   the directory is unreachable.
 
-Failed sign-ins are rate-limited: 5 per account and 20 per IP in 15 minutes. `/account/setup` creates the first local
-account only while no directory is configured and no local account exists; otherwise it does not exist (404).
+Failed sign-ins are rate-limited in 15 minutes: 5 per account from one IP, 20 per IP, and 50 per account from all
+IPs together. Every failure shows the same message, also for a correct password without an admin or viewer group;
+the reason is in the **Audit log**. `/account/setup` creates the first local account only while no directory is
+configured and no local account exists; otherwise it does not exist (404).
+
+A session lasts until 8 hours without activity, and at most `Console:SessionMaxHours` (default 12) after sign-in. It
+ends earlier when a local account is disabled or its password is reset, or when a domain user is disabled, deleted,
+removed from the groups or moved to the other role (seen at the next directory sync; a deletion at the next full
+sync). Sign in again then.
 
 ## Pages
 
@@ -43,7 +51,7 @@ account only while no directory is configured and no local account exists; other
 | **History** | Name, user and IP history across all computers |
 | **Agent updates** | Update tasks and their state |
 | **Directory** | Synced AD tree, sync status, **Sync now**, bind password, test connection; shows AD computers without an agent |
-| **Settings** | **General** (language of the Console and the agents), Enrolment (install password, requirement, awaiting-approval policy), Agent install (**automatic agent updates**, fingerprint, `msiexec` line, MSI download/upload), History (retention), Local accounts, **Announcement window** (text to the right of the title, with a preview), About and updates |
+| **Settings** | **General** (language of the Console and the agents), Enrolment (install password, requirement, awaiting-approval policy), Agent install (**automatic agent updates**, fingerprint, `msiexec` line, download of the cached MSI), History (retention), Local accounts, **Announcement window** (text to the right of the title, with a preview), About and updates |
 | **Audit log** | Who created, edited or deleted announcements, revoked computers, changed settings, signed in |
 
 ## Language
@@ -64,6 +72,8 @@ Every list uses the same server-side grid:
 - row checkboxes with an **action bar** at the bottom, and a right-click menu.
 
 The current filter, sort and page are **stored in the URL**, so a view can be bookmarked or shared. **Export CSV**
-exports the whole filtered result, not only the visible page. **Reload** also refreshes what the page shows around the
+exports the whole filtered result, not only the visible page (UTF-8 with a BOM, column headers in the Console
+language). Fields are separated by **`;` when the language is Polish** (the list separator of Polish spreadsheets) and
+by `,` otherwise. **Reload** also refreshes what the page shows around the
 grid, such as the answer charts on an announcement's results. The search box in the top bar searches computers,
 users and announcements.

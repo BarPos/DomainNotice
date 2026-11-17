@@ -79,6 +79,35 @@ public static class DistinguishedNames
         return true;
     }
 
+    /// <summary>
+    /// Fast form of <see cref="IsUnderBase"/> for DNs already lowercased the same way (as stored in
+    /// DistinguishedNameLower): equal, or ending with "," + base where that comma separates RDNs. A comma escaped
+    /// with a backslash is part of a value, so "cn=x\,ou=finance,ou=pcs" is not inside "ou=finance,ou=pcs".
+    /// </summary>
+    public static bool IsSameOrBelowLower(string? dnLower, string? baseLower)
+    {
+        if (string.IsNullOrEmpty(dnLower) || string.IsNullOrEmpty(baseLower)) return false;
+        if (string.Equals(dnLower, baseLower, StringComparison.Ordinal)) return true;
+        return IsStrictlyBelowLower(dnLower, baseLower);
+    }
+
+    /// <summary>Like <see cref="IsSameOrBelowLower"/>, but the base itself does not count.</summary>
+    public static bool IsStrictlyBelowLower(string dnLower, string baseLower)
+    {
+        if (baseLower.Length == 0 || dnLower.Length <= baseLower.Length + 1) return false;
+        if (!dnLower.EndsWith(baseLower, StringComparison.Ordinal)) return false;
+        var comma = dnLower.Length - baseLower.Length - 1;
+        return dnLower[comma] == ',' && !IsEscaped(dnLower, comma);
+    }
+
+    /// <summary>True when the character at <paramref name="index"/> is escaped (an odd number of backslashes before it).</summary>
+    private static bool IsEscaped(string value, int index)
+    {
+        var backslashes = 0;
+        for (var i = index - 1; i >= 0 && value[i] == '\\'; i--) backslashes++;
+        return backslashes % 2 == 1;
+    }
+
     /// <summary>"dc=example,dc=local" → "example.local". Only DC components count.</summary>
     public static string DomainFromBaseDn(string? baseDn)
     {

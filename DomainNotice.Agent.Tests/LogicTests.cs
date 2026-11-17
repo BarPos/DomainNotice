@@ -77,6 +77,16 @@ public sealed class PackageDownloadTests : IDisposable
         Assert.Equal(ChunkResult.Complete, result);
         var verify = download.Verify();
         Assert.True(verify.Ok, verify.Error);
+        using (var package = Assert.IsType<FileStream>(verify.Package))
+        {
+            // The verified package comes back open, at the start, read-only.
+            Assert.Equal(0, package.Position);
+            Assert.False(package.CanWrite);
+            Assert.Equal(download.PackagePath, package.Name);
+            var copy = new MemoryStream();
+            package.CopyTo(copy);
+            Assert.Equal(data, copy.ToArray());
+        }
         Assert.True(File.Exists(download.PackagePath));
         Assert.False(File.Exists(download.PartPath));
         Assert.Equal(data, File.ReadAllBytes(download.PackagePath));
@@ -109,7 +119,9 @@ public sealed class PackageDownloadTests : IDisposable
         using var resumed = PackageDownload.OpenOrResume(_dir, cmd);
         Assert.Equal(262_144, resumed.Offset);
         Assert.Equal(ChunkResult.Complete, resumed.Append(Chunk(cmd.TaskId, data, 262_144, data.Length - 262_144)));
-        Assert.True(resumed.Verify().Ok);
+        var verify = resumed.Verify();
+        Assert.True(verify.Ok);
+        verify.Package!.Dispose();
     }
 
     [Fact]
@@ -339,6 +351,34 @@ public sealed class LocalIpcTests
     }
 
     [Fact]
-    public void Pipe_name_is_per_session() =>
-        Assert.Equal("DomainNotice.Agent.Session.3", LocalPipe.NameFor(3));
+    public void Pipe_name_is_per_session_and_per_service_start()
+    {
+        var suffix = new string('a', 32);
+        Assert.Equal("DomainNotice.Agent.Session.3." + suffix, LocalPipe.NameFor(3, suffix));
+        Assert.Throws<ArgumentException>(() => LocalPipe.NameFor(3, ""));
+        Assert.Throws<ArgumentException>(() => LocalPipe.NameFor(3, "..\\other"));
+    }
+
+    [Fact]
+    public void New_suffixes_are_128_random_bits_in_lowercase_hex()
+    {
+        var suffixes = Enumerable.Range(0, 100).Select(_ => LocalPipe.NewSuffix()).ToList();
+        Assert.All(suffixes, s => Assert.True(LocalPipe.IsValidSuffix(s), s));
+        Assert.Equal(32, suffixes[0].Length);
+        Assert.Equal(suffixes.Count, suffixes.Distinct().Count());
+    }
+
+    [Theory]
+    [InlineData(new string[0], null)]
+    [InlineData(new[] { "--pipe" }, null)]
+    [InlineData(new[] { "--pipe", "0123456789abcdef0123456789abcdef" }, "0123456789abcdef0123456789abcdef")]
+    [InlineData(new[] { "--PIPE=0123456789abcdef0123456789abcdef" }, "0123456789abcdef0123456789abcdef")]
+    [InlineData(new[] { "--other", "--pipe", "0123456789abcdef0123456789abcdef" }, "0123456789abcdef0123456789abcdef")]
+    [InlineData(new[] { "--pipe", "0123456789ABCDEF0123456789ABCDEF" }, null)] // the service sends lowercase only
+    [InlineData(new[] { "--pipe", "0123456789abcdef" }, null)]
+    [InlineData(new[] { "--pipe", "0123456789abcdef0123456789abcdeg" }, null)]
+    [InlineData(new[] { "--pipe", "0123456789abcdef0123456789abcdef.x" }, null)]
+    [InlineData(new[] { "0123456789abcdef0123456789abcdef" }, null)]
+    public void Session_ui_takes_the_suffix_only_from_a_valid_pipe_argument(string[] args, string? expected) =>
+        Assert.Equal(expected, LocalPipe.SuffixFromArgs(args));
 }

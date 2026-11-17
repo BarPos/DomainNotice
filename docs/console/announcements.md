@@ -65,7 +65,7 @@ Any matching target is enough. No targets means everyone.
 
 | Target | Matches |
 |---|---|
-| **User** | The logged-on user (`DOMAIN\user` from Windows), matched by sAMAccountName or UPN. Without a directory, a typed name: `alice` matches `CORP\alice` and `alice@corp`. |
+| **User** | The logged-on user (`DOMAIN\user` from Windows), matched by sAMAccountName or UPN. Without a directory, a typed name: `alice` matches `CORP\alice` and `alice@corp`. One domain is supported: once the directory sync knows its NetBIOS name, only accounts of that domain match (`DOMAIN\alice` or a UPN), so a local account such as `PC01\alice` never gets user, group or OU targets meant for the domain user. |
 | **User group** | Members of the AD group, nested groups included |
 | **Computer** | That enrolled computer, or the AD computer it is linked to |
 | **Computer group** | Linked computers that are members of the group, nested included |
@@ -98,8 +98,9 @@ Each announcement has these tabs:
 - **Deliveries:** sent, shown, confirmed and withdrawn;
 - **Confirmations:** who clicked which button, and when, on which computer;
 - **Answers:** a chart per question;
-- **CSV export:** UTF-8 with a BOM. Cells starting with `= + - @` get a leading `'` against spreadsheet formula
-  injection.
+- **CSV export:** UTF-8 with a BOM, fields separated by `;` when the language is Polish and by `,` otherwise. Cells
+  starting with `= + - @`, a tab or CR get a leading `'` against spreadsheet formula injection. Cells containing `,`,
+  `;`, a quote or a line break are quoted, so they stay one cell.
 
 ### Anonymous answers
 

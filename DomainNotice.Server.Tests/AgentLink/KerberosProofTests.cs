@@ -273,6 +273,105 @@ public class KerberosProofTests(PostgresFixture pg)
         Assert.False((await agent.ReceiveAsync<IdentityResult>(ct: Ct)).Linked);
     }
 
+    private async Task<IdentityResult> ProveAsync(TestAgentClient agent)
+    {
+        var token = new KerberosTokenBuilder { ServiceKey = ServiceKey(), ChannelBinding = ClientSideBinding(agent) }.Build();
+        await agent.SendAsync(new ProveIdentity { KerberosToken = Convert.ToBase64String(token) }, ct: Ct);
+        return await agent.ReceiveAsync<IdentityResult>(ct: Ct);
+    }
+
+    [Fact]
+    public async Task Proof_does_not_take_over_a_recently_seen_proven_record_until_an_admin_approves()
+    {
+        var db = await pg.CreateDatabaseAsync();
+        var observer = new RecordingObserver();
+        var adGuid = await AgentLinkTestHelpers.AddAdComputerAsync(db, "PC-1");
+        await using var server = await AgentLinkTestHelpers.StartAsync(db, observer, settings: KerberosSettings());
+        await server.Get<ISettingsStore>().SetSecretAsync(SettingKeys.DirectoryBindPassword, BindPassword, "test", Ct);
+
+        // The real agent proves PC-1$ and stays online.
+        var (real, realId) = await server.ConnectEnrolledAsync("PC-1");
+        await using var _r = real;
+        Assert.True((await ProveAsync(real)).Linked);
+
+        // Code running as the machine account enrols a second key under another name and proves PC-1$ too.
+        await using var rogue = await server.ConnectAsync();
+        var rogueId = (await rogue.EnrollAsync(computerName: "SOMETHING")).ComputerId!.Value;
+        await rogue.HelloAsync("SOMETHING");
+        await TestAgentServer.WaitUntilAsync(() => observer.Online.Contains(rogueId));
+        var result = await ProveAsync(rogue);
+
+        Assert.False(result.Linked);
+        Assert.Contains("administrator", result.Error);
+        var held = await AgentLinkTestHelpers.GetComputerAsync(db, rogueId);
+        Assert.Equal(AdLinkState.AwaitingApproval, held.AdLinkState);
+        Assert.Equal(realId, held.ConflictsWithComputerId);
+        Assert.Null(held.DirectoryObjectGuid);
+        var kept = await AgentLinkTestHelpers.GetComputerAsync(db, realId);
+        Assert.Equal(AdLinkState.Proven, kept.AdLinkState);
+        Assert.Equal(adGuid, kept.DirectoryObjectGuid);
+        Assert.Null(kept.ReplacedByComputerId);
+        await real.PingAsync(); // still connected
+
+        // Proving again (every reconnect does) changes nothing and is audited only once.
+        Assert.False((await ProveAsync(rogue)).Linked);
+        // The periodic name job does not release the hold either.
+        await server.Get<AdLinkService>().EvaluatePendingAsync(Ct);
+        Assert.Equal(AdLinkState.AwaitingApproval, (await AgentLinkTestHelpers.GetComputerAsync(db, rogueId)).AdLinkState);
+        await using (var ctx = db.CreateContext())
+            Assert.Equal(1, await ctx.AuditLog.CountAsync(a => a.Action == AuditActions.ComputerProofAwaitingApproval, Ct));
+
+        // The administrator approves the replacement (Awaiting approval → Replace the old computer).
+        Assert.True((await server.Get<IComputerAdminService>().ApproveReplaceAsync(rogueId, "admin", Ct)).Ok);
+        Assert.Equal(RefusedReasons.Replaced, (await real.WaitForRefusedAsync())?.Reason);
+        Assert.Equal(rogueId, (await AgentLinkTestHelpers.GetComputerAsync(db, realId)).ReplacedByComputerId);
+        // The next proof upgrades the name link to Proven.
+        Assert.True((await ProveAsync(rogue)).Linked);
+        Assert.Equal(AdLinkState.Proven, (await AgentLinkTestHelpers.GetComputerAsync(db, rogueId)).AdLinkState);
+    }
+
+    [Fact]
+    public async Task Proof_replaces_a_proven_record_that_was_offline_for_long_or_revoked()
+    {
+        var db = await pg.CreateDatabaseAsync();
+        await AgentLinkTestHelpers.AddAdComputerAsync(db, "PC-1");
+        await AgentLinkTestHelpers.AddAdComputerAsync(db, "PC-2");
+        await using var server = await AgentLinkTestHelpers.StartAsync(db, settings: KerberosSettings());
+        await server.Get<ISettingsStore>().SetSecretAsync(SettingKeys.DirectoryBindPassword, BindPassword, "test", Ct);
+        var hub = server.Get<IAgentHub>();
+
+        // PC-1: the old installation proved, then went away 8 days ago (re-imaged machine).
+        var (old, oldId) = await server.ConnectEnrolledAsync("PC-1");
+        Assert.True((await ProveAsync(old)).Linked);
+        await old.DisposeAsync();
+        await TestAgentServer.WaitUntilAsync(() => !hub.IsOnline(oldId));
+        await using (var ctx = db.CreateContext())
+            await ctx.Computers.Where(c => c.Id == oldId)
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastSeenAtUtc, DateTime.UtcNow.AddDays(-8)), Ct);
+
+        await using var fresh = await server.ConnectAsync();
+        var freshId = (await fresh.EnrollAsync(computerName: "PC-1")).ComputerId!.Value;
+        await fresh.HelloAsync("PC-1");
+        Assert.True((await ProveAsync(fresh)).Linked);
+        Assert.Equal(freshId, (await AgentLinkTestHelpers.GetComputerAsync(db, oldId)).ReplacedByComputerId);
+
+        // PC-2: the old record is online but was revoked by an administrator.
+        var (old2, old2Id) = await server.ConnectEnrolledAsync("PC-2");
+        await using var _o2 = old2;
+        var token = new KerberosTokenBuilder { ServiceKey = ServiceKey(), ChannelBinding = ClientSideBinding(old2), ClientName = "PC-2$" }.Build();
+        await old2.SendAsync(new ProveIdentity { KerberosToken = Convert.ToBase64String(token) }, ct: Ct);
+        Assert.True((await old2.ReceiveAsync<IdentityResult>(ct: Ct)).Linked);
+        Assert.True((await server.Get<IComputerAdminService>().RevokeAsync(old2Id, "admin", Ct)).Ok);
+
+        await using var fresh2 = await server.ConnectAsync();
+        var fresh2Id = (await fresh2.EnrollAsync(computerName: "PC-2")).ComputerId!.Value;
+        await fresh2.HelloAsync("PC-2");
+        token = new KerberosTokenBuilder { ServiceKey = ServiceKey(), ChannelBinding = ClientSideBinding(fresh2), ClientName = "PC-2$" }.Build();
+        await fresh2.SendAsync(new ProveIdentity { KerberosToken = Convert.ToBase64String(token) }, ct: Ct);
+        Assert.True((await fresh2.ReceiveAsync<IdentityResult>(ct: Ct)).Linked);
+        Assert.Equal(AdLinkState.Proven, (await AgentLinkTestHelpers.GetComputerAsync(db, fresh2Id)).AdLinkState);
+    }
+
     [Fact]
     public async Task Proof_minted_for_another_server_is_refused_over_tls()
     {

@@ -56,7 +56,8 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
             var account = await db.LocalAccounts.FirstOrDefaultAsync(a => a.NormalizedUserName == normalized, ct);
             if (account is null || account.Disabled || !PasswordHasher.Verify(password, account.PasswordHash)) return new SignInOutcome(false);
             return new SignInOutcome(true, account.UserName, account.UserName,
-                normalized.StartsWith("viewer", StringComparison.Ordinal) ? ConsoleRoles.Viewer : ConsoleRoles.Admin, SignInSource.Local);
+                normalized.StartsWith("viewer", StringComparison.Ordinal) ? ConsoleRoles.Viewer : ConsoleRoles.Admin, SignInSource.Local,
+                PasswordStamp: Server.Accounts.LocalAccountService.PasswordStamp(account.PasswordHash));
         }
 
         public async Task<bool> IsFirstRunSetupAllowedAsync(CancellationToken ct = default)
@@ -93,7 +94,16 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
 
         // Wrong password and a missing antiforgery token are refused; the error never says which part was wrong.
         var loginPage = await client.GetStringAsync("/account/login", Ct);
-        var bad = await client.PostAsync("/account/login", Form(loginPage, ("source", "local"), ("username", "admin"), ("password", "nope")), Ct);
+        // The hidden return URL is sanitised too: a tab (decoded from %09) or a backslash never reaches the form.
+        foreach (var hostile in new[] { "%2F%09%2Fevil.example", "%2F%5Cevil.example", "%2F%2Fevil.example", "%2F%0A%2Fevil.example" })
+        {
+            var page = await client.GetStringAsync("/account/login?returnUrl=" + hostile, Ct);
+            Assert.Contains("name=\"returnUrl\" value=\"/\"", page);
+            Assert.DoesNotContain("evil.example", page);
+        }
+        Assert.Contains("name=\"returnUrl\" value=\"/computers?node=revoked\"",
+            WebUtility.HtmlDecode(await client.GetStringAsync("/account/login?returnUrl=" + Uri.EscapeDataString("/computers?node=revoked"), Ct)));
+        var bad =await client.PostAsync("/account/login", Form(loginPage, ("source", "local"), ("username", "admin"), ("password", "nope")), Ct);
         Assert.Contains("error=1", bad.Headers.Location!.ToString());
         var noToken = await client.PostAsync("/account/login",
             new FormUrlEncodedContent([new("source", "local"), new("username", "admin"), new("password", "Passw0rd!x")]), Ct);
@@ -108,6 +118,19 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("secure", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
+
+        // Open redirect: browsers drop tab/CR/LF in a URL, so "/<TAB>/evil.example" would land on //evil.example.
+        foreach (var (returnUrl, expected) in new[]
+                 {
+                     ("/\t/evil.example/x", "/"), ("/\n/evil.example", "/"), ("/\r\n/evil.example", "/"), ("/\\evil.example", "/"),
+                     ("/x\\..\\\\evil.example", "/"), ("//evil.example", "/"), ("/ok?x=1", "/ok?x=1"),
+                 })
+        {
+            var again = await client.PostAsync("/account/login", Form(await client.GetStringAsync("/account/login", Ct),
+                ("source", "local"), ("username", "admin"), ("password", "Passw0rd!x"), ("returnUrl", returnUrl)), Ct);
+            Assert.Equal(HttpStatusCode.Redirect, again.StatusCode);
+            Assert.Equal(expected, again.Headers.Location!.OriginalString);
+        }
 
         foreach (var path in new[]
                  {
@@ -131,6 +154,43 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
         }
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/export/nope.csv", Ct)).StatusCode);
 
+        // CSV separator follows the language: ';' for Polish (the list separator of Polish spreadsheets), header translated.
+        var englishCsv = await client.GetByteArrayAsync("/export/computers.csv", Ct);
+        Assert.Equal([0xEF, 0xBB, 0xBF], englishCsv[..3]);
+        var englishHeader = System.Text.Encoding.UTF8.GetString(englishCsv[3..]).Split("\r\n")[0];
+        Assert.StartsWith("Status,Name,", englishHeader);
+        var language = factory.Services.GetRequiredService<IAppLanguage>();
+        Assert.True((await language.SetAsync(DomainNotice.Shared.AppLanguages.Polish, "test", Ct)).Ok);
+        try
+        {
+            var polishCsv = await client.GetByteArrayAsync("/export/computers.csv", Ct);
+            Assert.Equal([0xEF, 0xBB, 0xBF], polishCsv[..3]);
+            var header = System.Text.Encoding.UTF8.GetString(polishCsv[3..]).Split("\r\n")[0];
+            Assert.Contains(";Nazwa;", header);
+            Assert.DoesNotContain(",", header);
+            Assert.Equal(englishHeader.Split(',').Length, header.Split(';').Length);
+        }
+        finally
+        {
+            Assert.True((await language.SetAsync(DomainNotice.Shared.AppLanguages.English, "test", Ct)).Ok);
+        }
+
+        // 1.0.5: no MSI upload in the Console (the package only comes from the release download).
+        var adminSettings = await client.GetStringAsync("/settings?tab=agent", Ct);
+        Assert.DoesNotContain("agent-package", adminSettings);
+        Assert.DoesNotContain("type=\"file\"", adminSettings);
+        using (var upload = new MultipartFormDataContent
+               {
+                   { new StringContent(WebUtility.HtmlDecode(TokenRegex().Match(adminSettings).Groups[1].Value)), "__RequestVerificationToken" },
+                   { new ByteArrayContent([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]), "file", "DomainNotice.Agent.msi" },
+               })
+        {
+            var gone = await client.PostAsync("/settings/agent-package", upload, Ct);
+            // No POST endpoint any more (405: only the GET catch-all of the Blazor router matches the path).
+            Assert.True(gone.StatusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.NotFound, $"{(int)gone.StatusCode}");
+        }
+        Assert.Null(await factory.Services.GetRequiredService<IAgentPackageCache>().GetCurrentAsync(Ct));
+
         var logoutPage = await client.GetStringAsync("/", Ct);
         var logout = await client.PostAsync("/account/logout", Form(logoutPage), Ct);
         Assert.Equal(HttpStatusCode.Redirect, logout.StatusCode);
@@ -146,11 +206,7 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
         Assert.Contains("Read-only", list);
         Assert.DoesNotContain("New announcement", list);
         var settings = await client.GetStringAsync("/settings?tab=agent", Ct);
-        Assert.DoesNotContain("/settings/agent-package", settings);
-        using var upload = new MultipartFormDataContent { { new StringContent(TokenRegex().Match(settings).Groups[1].Value), "__RequestVerificationToken" } };
-        var refused = await client.PostAsync("/settings/agent-package", upload, Ct);
-        Assert.True(refused.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Redirect, $"{(int)refused.StatusCode}");
-        if (refused.StatusCode == HttpStatusCode.Redirect) Assert.StartsWith("/account/denied", refused.Headers.Location!.PathAndQuery);
+        Assert.DoesNotContain("agent-package", settings);
 
         try { System.IO.Directory.Delete(dataDir, true); } catch (IOException) { }
     }
@@ -162,6 +218,20 @@ public partial class ConsoleSmokeTests(PostgresFixture pg)
     [InlineData("/\\evil.example", "/")]
     [InlineData("https://evil.example/", "/")]
     [InlineData("/account/logout", "/")]
+    [InlineData("/ok?x=1", "/ok?x=1")]
+    [InlineData("/", "/")]
+    // Browsers drop tab/CR/LF inside a URL, so these would become //evil.example (decoded forms of %09, %0A, %0D).
+    [InlineData("/\t/evil.example", "/")]
+    [InlineData("/\t/evil.example/x", "/")]
+    [InlineData("/\n/evil", "/")]
+    [InlineData("/\r/evil", "/")]
+    [InlineData("/x\u007f", "/")]
+    [InlineData("/\u0000/evil", "/")]
+    [InlineData("\t//evil.example", "/")]
+    [InlineData("/computers\\..\\evil", "/")] // '\' anywhere, browsers read it as '/'
+    [InlineData("/%09/evil.example", "/%09/evil.example")] // still encoded: a local path, never decoded again
+    [InlineData("/computers?f=user:contains:CORP%5Calice", "/computers?f=user:contains:CORP%5Calice")]
+    [InlineData("evil.example", "/")]
     public void Return_url_must_be_local(string? input, string expected) =>
         Assert.Equal(expected, ConsoleEndpoints.SafeReturnUrl(input));
 

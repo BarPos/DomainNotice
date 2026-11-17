@@ -243,21 +243,13 @@ internal static partial class ConsoleStrings
         d["No agent MSI is cached for this server version."] = "Brak pakietu MSI agenta w pamięci podręcznej dla tej wersji serwera.";
         d["It is downloaded from GitHub on \"Check now\" (About and updates)."] =
             "Zostanie pobrany z GitHub po kliknięciu „Sprawdź teraz” (Informacje i aktualizacje).";
-        d["Import a locally built MSI below."] = "Zaimportuj poniżej lokalnie zbudowany pakiet MSI.";
+        d["It is downloaded from the GitHub release, which needs Updates:GitHubRepository in the config file."] =
+            "Jest pobierany z wydania w GitHub, co wymaga ustawienia Updates:GitHubRepository w pliku konfiguracyjnym.";
         d["Download {0}"] = "Pobierz {0}";
         d["Version"] = "Wersja";
         d["Size"] = "Rozmiar";
         d["Source"] = "Źródło";
         d["Added"] = "Dodano";
-        d["Import a locally built MSI"] = "Import lokalnie zbudowanego pakietu MSI";
-        d["For version {0}, at most {1} MB. Used for first installs and agent updates."] =
-            "Dla wersji {0}, maksymalnie {1} MB. Używany przy pierwszych instalacjach i aktualizacjach agentów.";
-        d["Import"] = "Importuj";
-        // Results of the MSI import (shown on this tab)
-        d["Choose an MSI file."] = "Wybierz plik MSI.";
-        d["Only .msi files can be imported."] = "Można importować tylko pliki .msi.";
-        d["The file is too large."] = "Plik jest za duży.";
-        d["The package could not be imported."] = "Nie udało się zaimportować pakietu.";
 
         // Settings: History
         d["Retention"] = "Przechowywanie";

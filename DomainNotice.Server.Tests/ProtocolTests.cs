@@ -50,6 +50,59 @@ public class ProtocolTests
     }
 
     [Fact]
+    public async Task Lying_length_header_allocates_only_what_arrives()
+    {
+        // Header announces 1 MiB, the peer sends 10 bytes and stops.
+        var bytes = new byte[Framing.HeaderSize + 10];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes, 1024 * 1024);
+        bytes[4] = (byte)FrameKind.Json;
+        var stream = new MemoryStream(bytes);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        await Assert.ThrowsAsync<ProtocolException>(async () =>
+            await Framing.ReadAsync(stream, ProtocolInfo.DefaultMaxFrameBytes, Framing.InitialBodyBuffer, TestContext.Current.CancellationToken));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.True(allocated < 256 * 1024, $"allocated {allocated} bytes for a 10-byte body");
+    }
+
+    [Fact]
+    public async Task Large_frame_arriving_in_pieces_is_read_whole()
+    {
+        // Bigger than the initial buffer, delivered in small reads: the buffer grows as data arrives.
+        var body = new byte[Framing.InitialBodyBuffer * 5 + 123];
+        Random.Shared.NextBytes(body);
+        var frame = new byte[Framing.HeaderSize + body.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(frame, (uint)body.Length);
+        frame[4] = (byte)FrameKind.Chunk;
+        body.CopyTo(frame, Framing.HeaderSize);
+
+        var read = await Framing.ReadAsync(new TrickleStream(frame, 1000), ProtocolInfo.DefaultMaxFrameBytes, Framing.InitialBodyBuffer, TestContext.Current.CancellationToken);
+
+        Assert.Equal(body, read!.Value.Body.ToArray());
+    }
+
+    [Fact]
+    public async Task Read_limit_can_be_lowered_without_limiting_sends()
+    {
+        var ms = new MemoryStream();
+        var conn = new FrameConnection(ms) { MaxReadBodyBytes = 1000 };
+        // Sending a 256 KiB chunk still works (the send limit is the constructor's).
+        await conn.SendChunkAsync(Guid.NewGuid(), 0, new byte[ProtocolInfo.ChunkSize], TestContext.Current.CancellationToken);
+        ms.Position = 0;
+        await Assert.ThrowsAsync<ProtocolException>(async () => await conn.ReadAsync(TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>Returns at most <c>max</c> bytes per read, like a slow network.</summary>
+    private sealed class TrickleStream(byte[] data, int max) : MemoryStream(data)
+    {
+        public override int Read(byte[] buffer, int offset, int count) => base.Read(buffer, offset, Math.Min(count, max));
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            base.ReadAsync(buffer[..Math.Min(buffer.Length, max)], cancellationToken);
+    }
+
+    [Fact]
     public void Wire_format_is_frozen()
     {
         // 4-byte big-endian body length, kind byte, body.

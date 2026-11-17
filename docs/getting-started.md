@@ -61,6 +61,10 @@ targets, and members of the admin groups can sign in with their domain account.
 
 ## 4. Install the agent on a PC
 
+Get `DomainNotice.Agent-<version>-x64.msi` for your server version from the release, or from **Settings → Agent
+install**, where the server offers the copy it downloaded from that release. A server without GitHub access has no
+copy (the Console has no MSI upload), so take the MSI from the release.
+
 In an elevated prompt, with the values from **Settings → Agent install** (the Console shows a ready-to-copy line):
 
 ```bat

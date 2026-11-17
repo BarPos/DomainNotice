@@ -213,8 +213,13 @@ internal sealed class DeliveryCoordinator : IAgentLifecycleObserver
         }).ToList();
         if (candidates.Count == 0) return;
 
-        var user = await _loader.LoadUserAsync(db, userName, ct);
-        var due = candidates.FirstOrDefault(a => Eligibility.AudienceMatches(a.Rule.Targets, computer, user, policy));
+        var netBios = await NetBiosDomainAsync(ct);
+        // A local account (PC01\alice) of the one supported domain's PCs is not the AD user alice: no AD facts.
+        var user = netBios is not null && !IdentityMatch.IsDomainAccount(userName, netBios)
+            ? UserFacts.NameOnly(userName)
+            : await _loader.LoadUserAsync(db, userName, ct);
+        user = user with { NetBiosDomain = netBios };
+        var due =candidates.FirstOrDefault(a => Eligibility.AudienceMatches(a.Rule.Targets, computer, user, policy));
         if (due is null) return;
 
         var delivery = new Delivery
@@ -231,6 +236,28 @@ internal sealed class DeliveryCoordinator : IAgentLifecycleObserver
         _logger.LogInformation("Delivering announcement {AnnouncementId} to {User} on {ComputerId} (delivery {DeliveryId})",
             due.Rule.Id, userName, computer.Id, delivery.Id);
         await SendShowAsync(computer.Id, delivery.Id, userName, due.Entity, ct);
+    }
+
+    private static readonly TimeSpan NetBiosCacheTime = TimeSpan.FromMinutes(1);
+    private (string? Value, DateTime ReadUtc) _netBios = (null, DateTime.MinValue);
+    private bool _netBiosMissingLogged;
+
+    /// <summary>The domain's NetBIOS name (written by the directory sync), cached for a minute; null when unknown.</summary>
+    private async Task<string?> NetBiosDomainAsync(CancellationToken ct)
+    {
+        var cached = _netBios;
+        if (Now - cached.ReadUtc < NetBiosCacheTime) return cached.Value;
+        var settings = _services.GetService<ISettingsStore>();
+        var value = settings is null ? null : await settings.GetAsync(SettingKeys.DirectoryNetBiosName, ct);
+        value = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        _netBios = (value, Now);
+        if (value is null && !_netBiosMissingLogged)
+        {
+            _netBiosMissingLogged = true;
+            _logger.LogInformation("The domain's NetBIOS name is not known yet (no directory sync); user targets typed as names " +
+                                   "also match accounts of other domains or local accounts with that name.");
+        }
+        return value;
     }
 
     private async Task SendShowAsync(Guid computerId, Guid deliveryId, string userName, Announcement announcement, CancellationToken ct)

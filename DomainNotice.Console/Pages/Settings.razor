@@ -115,18 +115,10 @@
 
         <MudDivider Class="my-4" />
         <MudText Typo="Typo.subtitle1">@T.F("Agent package (MSI) for version {0}", AppVersion.Current)</MudText>
-        @if (Imported is not null)
-        {
-            <MudAlert Severity="Severity.Success" Dense="true" Class="my-2">@T[Imported]</MudAlert>
-        }
-        @if (ImportError is not null)
-        {
-            <MudAlert Severity="Severity.Error" Dense="true" Class="my-2">@T[ImportError]</MudAlert>
-        }
         @if (_current is null)
         {
             <MudText Class="my-2">@T["No agent MSI is cached for this server version."]
-                @(UpdatesOptions.Value.IsConfigured ? T["It is downloaded from GitHub on \"Check now\" (About and updates)."] : T["Import a locally built MSI below."])</MudText>
+                @(UpdatesOptions.Value.IsConfigured ? T["It is downloaded from GitHub on \"Check now\" (About and updates)."] : T["It is downloaded from the GitHub release, which needs Updates:GitHubRepository in the config file."])</MudText>
         }
         else
         {
@@ -149,17 +141,6 @@
                 </tbody>
             </MudSimpleTable>
         }
-        <AuthorizeView Policy="@ConsoleAuth.AdminPolicy">
-            <MudPaper Outlined="true" Class="pa-3 mt-3">
-                <MudText Typo="Typo.subtitle2">@T["Import a locally built MSI"]</MudText>
-                <MudText Typo="Typo.caption">@T.F("For version {0}, at most {1} MB. Used for first installs and agent updates.", AppVersion.Current, Endpoints.ConsoleEndpoints.MaxMsiBytes / (1024 * 1024))</MudText>
-                <form method="post" action="/settings/agent-package" enctype="multipart/form-data" class="d-flex align-center gap-3 mt-2">
-                    <AntiforgeryToken />
-                    <input type="file" name="file" accept=".msi" required />
-                    <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Upload">@T["Import"]</MudButton>
-                </form>
-            </MudPaper>
-        </AuthorizeView>
     </MudTabPanel>
 
     <MudTabPanel Text="@T["History"]" Icon="@Icons.Material.Filled.History">
@@ -285,8 +266,6 @@
     private bool _autoUpdate;
 
     [SupplyParameterFromQuery(Name = "tab")] public string? Tab { get; set; }
-    [SupplyParameterFromQuery(Name = "imported")] public string? Imported { get; set; }
-    [SupplyParameterFromQuery(Name = "importError")] public string? ImportError { get; set; }
 
     private bool _isAdmin;
     private bool _busy;
@@ -345,7 +324,7 @@
         if (!RendererInfo.IsInteractive || index == TabIndex) return;
         Nav.NavigateTo(Nav.GetUriWithQueryParameters(new Dictionary<string, object?>
         {
-            ["tab"] = index == 0 ? null : Tabs[index], ["imported"] = null, ["importError"] = null,
+            ["tab"] = index == 0 ? null : Tabs[index],
         }), replace: true);
     }
 

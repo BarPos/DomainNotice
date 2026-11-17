@@ -50,6 +50,8 @@ public sealed class FakeLdapSource : ILdapSource
     public int? FailAfter { get; set; }
     public Exception? OpenError { get; set; }
     public List<long?> Searches { get; } = [];
+    /// <summary>What the crossRef lookup returns (null = not found).</summary>
+    public string? NetBiosName { get; set; } = "EXAMPLE";
 
     public Task<ILdapSourceSession> OpenAsync(CancellationToken ct)
     {
@@ -150,6 +152,8 @@ public sealed class FakeLdapSource : ILdapSource
                 yield return e;
             }
         }
+
+        public Task<string?> ReadNetBiosNameAsync(CancellationToken ct) => Task.FromResult(source.NetBiosName);
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
